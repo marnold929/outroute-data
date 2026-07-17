@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OutRoute — Two names. One answer.</title>
+<meta name="description" content="OutRoute is the fantasy football answer engine: instant draft verdicts, live draft sync, waiver bids, and an analyst who knows your team. $14.99 once — no subscription.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #071226;
+    --card: #0B1B33;
+    --card-border: #1C3352;
+    --ink: #EAF2EC;
+    --sub: #9FB0C8;
+    --faint: #61708C;
+    --yellow: #FFD60A;
+    --green: #35D07C;
+    --red: #FF4F42;
+    --paper: #F5F2E9;
+    --paper-ink: #101425;
+    --paper-sub: #6B6F80;
+    --paper-line: #B9B4A4;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    background:
+      repeating-linear-gradient(to bottom, transparent 0 71px, rgba(126, 200, 160, 0.05) 71px 72px),
+      var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, system-ui, "Segoe UI", sans-serif;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .display {
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+  }
+  .wrap { max-width: 1020px; margin: 0 auto; padding: 0 24px; }
+
+  /* header */
+  header { padding: 26px 0; }
+  header .wrap { display: flex; align-items: center; justify-content: space-between; }
+  .wordmark { display: flex; align-items: center; gap: 10px; }
+  .wordmark span {
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-weight: 700; font-size: 22px; letter-spacing: 0.12em;
+  }
+  .wordmark b { color: var(--yellow); }
+
+  /* hero */
+  .hero { padding: 64px 0 30px; text-align: center; }
+  .hero h1 {
+    font-size: clamp(52px, 9vw, 108px);
+    font-weight: 700; line-height: 0.98;
+  }
+  .hero h1 .yes { color: var(--yellow); }
+  .hero p.tag {
+    color: var(--sub); font-size: clamp(16px, 2.4vw, 20px);
+    max-width: 560px; margin: 22px auto 0;
+  }
+  .cta {
+    display: inline-block; margin-top: 34px;
+    background: var(--yellow); color: var(--bg);
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-weight: 600; font-size: 19px; letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 15px 42px; border-radius: 12px; text-decoration: none;
+  }
+  .cta:hover { filter: brightness(1.08); }
+  .hero .under { color: var(--faint); font-size: 13px; margin-top: 12px; }
+
+  /* receipt */
+  .receipt-zone { display: flex; justify-content: center; padding: 44px 0 10px; }
+  .receipt {
+    background: var(--paper); color: var(--paper-ink);
+    width: 330px; padding: 22px 22px 16px;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 12px; line-height: 1.55;
+    transform: rotate(-1.6deg);
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 8px, #000 calc(100% - 8px), transparent 100%);
+            mask-image: linear-gradient(to bottom, transparent 0, #000 8px, #000 calc(100% - 8px), transparent 100%);
+  }
+  .receipt .rhead { display: flex; justify-content: space-between; color: var(--paper-sub); letter-spacing: 0.18em; font-weight: 600; }
+  .receipt .rule { border-top: 2px dashed var(--paper-line); margin: 12px 0; }
+  .receipt .vlabel { color: var(--paper-sub); letter-spacing: 0.22em; font-size: 10px; font-weight: 600; }
+  .receipt .verdict {
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-size: 42px; font-weight: 700; line-height: 1.02; letter-spacing: 0.01em;
+  }
+  .receipt .meta { color: var(--paper-sub); font-size: 10px; margin-top: 4px; }
+  .receipt .stamp {
+    display: inline-block; background: var(--yellow); color: var(--paper-ink);
+    font-weight: 600; font-size: 11px; padding: 2px 8px; margin-top: 10px;
+    transform: rotate(-2deg);
+  }
+  .receipt ul { list-style: none; margin-top: 2px; }
+  .receipt li { padding-left: 18px; position: relative; margin-top: 6px; }
+  .receipt li::before { content: "✓"; position: absolute; left: 0; color: #0A7A46; font-weight: 600; }
+  .receipt .warn::before { content: "⚠"; color: #B25E00; }
+  .receipt .norefunds { text-align: center; color: #9B9686; font-size: 9px; letter-spacing: 0.14em; margin-top: 14px; }
+
+  /* features */
+  section.features { padding: 70px 0 20px; }
+  h2.sec {
+    font-size: clamp(30px, 5vw, 46px); font-weight: 700; text-align: center; margin-bottom: 40px;
+  }
+  h2.sec em { font-style: normal; color: var(--green); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+  .card {
+    background: var(--card); border: 1px solid var(--card-border); border-radius: 16px;
+    padding: 26px 24px;
+  }
+  .card .kick {
+    font-family: "Oswald", "Arial Narrow", sans-serif; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.1em; font-size: 17px; color: var(--yellow);
+  }
+  .card.green .kick { color: var(--green); }
+  .card p { color: var(--sub); font-size: 14.5px; margin-top: 8px; }
+
+  /* pricing */
+  section.pricing { padding: 80px 0; text-align: center; }
+  .price-card {
+    display: inline-block; background: var(--card); border: 1px solid var(--card-border);
+    border-radius: 20px; padding: 44px 60px;
+  }
+  .price-card .big {
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-size: clamp(46px, 7vw, 72px); font-weight: 700; text-transform: uppercase; line-height: 1;
+  }
+  .price-card .big b { color: var(--green); font-weight: 700; }
+  .price-card .fine { color: var(--sub); margin-top: 14px; font-size: 15px; }
+  .price-card .fine strong { color: var(--ink); }
+
+  /* footer */
+  footer { border-top: 1px solid var(--card-border); padding: 40px 0 60px; }
+  footer .links { display: flex; gap: 26px; flex-wrap: wrap; justify-content: center; }
+  footer a { color: var(--sub); text-decoration: none; font-size: 14px; }
+  footer a:hover { color: var(--ink); }
+  footer .legal {
+    color: var(--faint); font-size: 12px; text-align: center; max-width: 640px;
+    margin: 22px auto 0; line-height: 1.7;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div class="wordmark">
+      <svg width="30" height="20" viewBox="0 0 30 20" fill="none" aria-hidden="true">
+        <path d="M1 17 H19 V6" stroke="#EAF2EC" stroke-width="3" stroke-dasharray="5 4"/>
+        <path d="M13 9 L19 1 L25 9" stroke="#FFD60A" stroke-width="3" stroke-linejoin="round" fill="none"/>
+      </svg>
+      <span>OUT<b>ROUTE</b></span>
+    </div>
+    <a class="cta" style="padding:9px 20px;font-size:15px;margin:0" href="#store-link">Get the app</a>
+  </div>
+</header>
+
+<main>
+  <div class="hero wrap">
+    <h1 class="display">Two names.<br><span class="yes">One answer.</span></h1>
+    <p class="tag">OutRoute is the fantasy football answer engine. Stop scrolling rankings mid-pick —
+      type two names and get a verdict with a confidence number and the receipts to back it up.</p>
+    <a class="cta" id="store-link" href="#">Download on the App&nbsp;Store</a>
+    <div class="under">iPhone &amp; iPad · iOS 17+</div>
+  </div>
+
+  <div class="receipt-zone wrap" aria-hidden="true">
+    <div class="receipt">
+      <div class="rhead"><span>OUTROUTE</span><span>AUG 24 · 8:41 PM</span></div>
+      <div class="rule"></div>
+      <div class="vlabel">THE VERDICT</div>
+      <div class="verdict">DRAFT<br>GIBBS</div>
+      <div class="meta">DET RB · BYE 8 · OVER WALKER</div>
+      <div class="stamp">STRONG EDGE +2.4 PTS</div>
+      <div class="rule"></div>
+      <ul>
+        <li>#9 overall vs #14 in PPR consensus</li>
+        <li>RB4 vs RB7 — a tier apart at the position</li>
+        <li class="warn">Both share bye week 8 — plan the pivot</li>
+      </ul>
+      <div class="norefunds">*** NO REFUNDS ON BAD PICKS ***</div>
+    </div>
+  </div>
+
+  <section class="features">
+    <div class="wrap">
+      <h2 class="sec display">Built for the moments<br>that <em>decide your season</em></h2>
+      <div class="grid">
+        <div class="card">
+          <div class="kick display">Instant verdicts</div>
+          <p>Two names in, one answer out — with a 50–99 confidence score, the reasons, and the cautions. Draft mode for keeper value, weekly mode for start/sit.</p>
+        </div>
+        <div class="card green">
+          <div class="kick display">Live draft sync</div>
+          <p>Connect Sleeper or ESPN and picks mark themselves off as they happen. Your board stays honest while everyone else fumbles with printouts.</p>
+        </div>
+        <div class="card">
+          <div class="kick display">On Deck</div>
+          <p>Snake-draft math tells you exactly when you pick next — and which targets survive until then, so you never reach and never miss.</p>
+        </div>
+        <div class="card green">
+          <div class="kick display">Daily rankings</div>
+          <p>A fresh multi-source consensus lands every morning: ranks, tiers, ADP value, usage trends, and injury storylines — tuned to your league's exact settings.</p>
+        </div>
+        <div class="card">
+          <div class="kick display">Waivers &amp; FAAB</div>
+          <p>Rate every name on your wire for YOUR roster, see who they'd displace, and get an exact bid range out of your budget. Know what to bid — exactly.</p>
+        </div>
+        <div class="card green">
+          <div class="kick display">The Analyst</div>
+          <p>An AI analyst who already knows your league, your roster, and your wire. Ask the question you'd ask a friend who watches everything.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="pricing">
+    <div class="wrap">
+      <div class="price-card">
+        <div class="big display">$14.99 <b>once</b></div>
+        <div class="fine"><strong>No subscription.</strong> Buy it before your draft, use it forever.<br>
+          Every ranking update included. The Analyst is optional, with credits included to start.</div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="links">
+      <a href="privacy.html">Privacy</a>
+      <a href="terms.html">Terms</a>
+      <a href="support.html">Support</a>
+    </div>
+    <p class="legal">
+      OutRoute is not affiliated with, endorsed by, or sponsored by the NFL, ESPN, Sleeper, Yahoo,
+      or any team or player. All team and player names are used for identification only.
+      OutRoute is a research tool for entertainment purposes — it is not a gambling product and
+      offers no wagering of any kind.
+      <br>© 2026 OutRoute.
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>
