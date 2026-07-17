@@ -11,12 +11,16 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import blurbs
 import model
 import sources
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SEASON_YEAR = 2026  # bump each season (also refresh pipeline/byes.json)
 MIN_PLAYERS = 150   # safety: never publish a suspiciously small file
+MIN_SCHEDULE_WEEKS = 17   # ESPN fetch degrades silently; never ship a gutted schedule
+MIN_ADP_ENTRIES = 100     # half/std rank sources must have real coverage
+MIN_SLEEPER_MATCH = 0.60  # fraction of PPR players that must match a Sleeper record
 
 
 def main():
@@ -37,6 +41,18 @@ def main():
     print(f"  sleeper={len(sleeper)} adp_ppr={len(adp_ppr)} half={len(adp_half)} "
           f"std={len(adp_std)} trending={len(trending)} schedule_weeks={len(schedule)}")
 
+    # Source-coverage guards (mirror MIN_PLAYERS): a degraded upstream must
+    # abort and keep the previous published file, never ship silently gutted data.
+    if not args.fixtures:
+        if len(schedule) < MIN_SCHEDULE_WEEKS:
+            print(f"ABORT: schedule has only {len(schedule)} weeks "
+                  f"(<{MIN_SCHEDULE_WEEKS}); ESPN fetch degraded — keeping previous file.")
+            sys.exit(1)
+        if len(adp_half) < MIN_ADP_ENTRIES or len(adp_std) < MIN_ADP_ENTRIES:
+            print(f"ABORT: ADP coverage too thin (half={len(adp_half)}, "
+                  f"std={len(adp_std)}, need {MIN_ADP_ENTRIES} each); keeping previous file.")
+            sys.exit(1)
+
     # Usage stats: prefer the current season as soon as real games exist, else last season.
     stats_season = SEASON_YEAR
     weeks_stats = sources.fetch_season_stats(stats_season, fixtures=args.fixtures)
@@ -46,9 +62,44 @@ def main():
     print(f"  usage stats: season={stats_season} weeks_with_games={len(weeks_stats)}")
 
     players = model.assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides)
+
+    # Sleeper match-rate guard — must run before attach_usage consumes _pid.
+    if players:
+        matched = sum(1 for p in players if p.get("_pid"))
+        match_rate = matched / len(players)
+        print(f"  sleeper match: {matched}/{len(players)} ({match_rate:.0%})")
+        if not args.fixtures and match_rate < MIN_SLEEPER_MATCH:
+            print(f"ABORT: only {match_rate:.0%} of players matched a Sleeper record "
+                  f"(<{MIN_SLEEPER_MATCH:.0%}); name-matching degraded — keeping previous file.")
+            sys.exit(1)
+
     filled = model.attach_usage(players, weeks_stats, stats_season,
                                 current_season=(stats_season == SEASON_YEAR))
     print(f"  usage populated for {filled}/{len(players)} players")
+
+    # Optional AI one-liners — no-op unless ANTHROPIC_API_KEY is set.
+    blurbs.attach_blurbs(players)
+
+    # Team-abbreviation safety: schedule keys come from ESPN (patched only by
+    # ESPN_TEAM_FIX) while player teams come from Sleeper/FFC. An unmapped
+    # abbreviation strands that team's players "ON BYE" all season, silently.
+    # Every non-FA team must appear in >=15 of the fetched weeks (a real team
+    # misses at most its bye week).
+    teams = {p["t"] for p in players if p["t"] != "FA"}
+    misses = sorted(
+        t for t in teams
+        if sum(1 for week_map in schedule.values() if t in week_map) < 15
+    )
+    if not misses:
+        print(f"  team coverage: all {len(teams)} teams present in the schedule")
+    else:
+        print(f"ABORT candidates — teams missing from the schedule (ESPN abbr mismatch?): {misses}")
+        for t in misses:
+            weeks_present = sum(1 for wm in schedule.values() if t in wm)
+            print(f"  {t}: present in {weeks_present}/{len(schedule)} weeks")
+        if not args.fixtures:
+            print("ABORT: unmapped team abbreviation(s) would strand players on permanent bye; keeping previous file.")
+            sys.exit(1)
     if len(players) < MIN_PLAYERS and not args.fixtures:
         print(f"ABORT: only {len(players)} players assembled (<{MIN_PLAYERS}); keeping previous file.")
         sys.exit(1)

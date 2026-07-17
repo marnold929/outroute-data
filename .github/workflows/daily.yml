@@ -23,6 +23,10 @@ jobs:
           python-version: "3.12"
 
       - name: Build players.json
+        env:
+          # Optional — when this repo secret is set, the build adds AI one-line
+          # takes ("ai" field). Absent/invalid keys skip cleanly.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python pipeline/build.py
 
       - name: Commit & publish if changed
