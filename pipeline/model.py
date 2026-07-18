@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from datetime import datetime, timedelta, timezone
 
 VALID_POS = {"QB", "RB", "WR", "TE", "K", "DEF"}
 POS_MAP = {"DEF": "DST", "PK": "K"}
@@ -143,6 +144,7 @@ def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, tea
             "rs": std_ranks.get(key),
             "note": note,
             "src": 1 + (1 if sp else 0) + (1 if key in half_ranks else 0) + (1 if key in std_ranks else 0),
+            "sid": sp.get("_pid"),   # matched Sleeper player id (null when unmatched)
             "_pid": sp.get("_pid"),
             "_sfx_score": (score + pen) * (0.55 if pos == "QB" else 1.0),
         })
@@ -212,3 +214,85 @@ def attach_usage(players, weeks_stats, season, current_season):
         p["us"] = f"{season} wk{wks[0]}-{wks[-1]}" if current_season else str(season)
         filled += 1
     return filled
+
+
+# ESPN news team categories carry full team names; map our abbreviations to them.
+TEAM_NAMES = {
+    "ARI": "Arizona Cardinals", "ATL": "Atlanta Falcons", "BAL": "Baltimore Ravens",
+    "BUF": "Buffalo Bills", "CAR": "Carolina Panthers", "CHI": "Chicago Bears",
+    "CIN": "Cincinnati Bengals", "CLE": "Cleveland Browns", "DAL": "Dallas Cowboys",
+    "DEN": "Denver Broncos", "DET": "Detroit Lions", "GB": "Green Bay Packers",
+    "HOU": "Houston Texans", "IND": "Indianapolis Colts", "JAX": "Jacksonville Jaguars",
+    "KC": "Kansas City Chiefs", "LAC": "Los Angeles Chargers", "LAR": "Los Angeles Rams",
+    "LV": "Las Vegas Raiders", "MIA": "Miami Dolphins", "MIN": "Minnesota Vikings",
+    "NE": "New England Patriots", "NO": "New Orleans Saints", "NYG": "New York Giants",
+    "NYJ": "New York Jets", "PHI": "Philadelphia Eagles", "PIT": "Pittsburgh Steelers",
+    "SEA": "Seattle Seahawks", "SF": "San Francisco 49ers", "TB": "Tampa Bay Buccaneers",
+    "TEN": "Tennessee Titans", "WAS": "Washington Commanders",
+}
+
+NEWS_MAX_AGE_DAYS = 10
+NEWS_PER_PLAYER = 3
+
+
+def attach_news(players, articles):
+    """Additive post-pass: attach up to 3 recent ESPN news items per player as
+    the optional "news" field [{"h": headline, "d": ISO date, "u": url}, ...].
+    Primary match: normalized athlete-category name (same norm as Sleeper
+    matching). Fallback: exact "First Last" in the headline, constrained to the
+    article's team categories when it has any. Returns players matched."""
+    if not articles:
+        print("  news: skipped (no articles)")
+        return 0
+    cutoff = datetime.now(timezone.utc) - timedelta(days=NEWS_MAX_AGE_DAYS)
+    by_name = {}
+    for p in players:
+        if p["p"] != "DST":
+            by_name.setdefault(norm(p["n"]), p)
+
+    per_player: dict[str, list] = {}
+    for a in articles:
+        headline = (a.get("headline") or "").strip()
+        pub = a.get("published") or ""
+        url = ((a.get("links") or {}).get("web") or {}).get("href")
+        if not headline or not pub or not url:
+            continue
+        try:
+            published = datetime.fromisoformat(pub.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if published.tzinfo is None:
+            published = published.replace(tzinfo=timezone.utc)
+        if published < cutoff:
+            continue
+        cats = a.get("categories") or []
+        athletes = [c.get("description") for c in cats
+                    if c.get("type") == "athlete" and c.get("description")]
+        team_names = {c.get("description") for c in cats if c.get("type") == "team"}
+
+        targets = {}
+        for name in athletes:
+            p = by_name.get(norm(name))
+            if p:
+                targets[p["id"]] = p
+        if not targets:
+            for p in players:
+                if p["p"] == "DST" or p["n"] not in headline:
+                    continue
+                full = TEAM_NAMES.get(p["t"])
+                if not team_names or (full and full in team_names):
+                    targets[p["id"]] = p
+
+        item = {"h": headline[:140], "d": pub, "u": url}
+        for pid in targets:
+            per_player.setdefault(pid, []).append((published, item))
+
+    matched = 0
+    for p in players:
+        entries = per_player.get(p["id"])
+        if entries:
+            entries.sort(key=lambda e: e[0], reverse=True)
+            p["news"] = [item for _, item in entries[:NEWS_PER_PLAYER]]
+            matched += 1
+    print(f"  news: attached to {matched} players from {len(articles)} articles")
+    return matched

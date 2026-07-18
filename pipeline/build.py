@@ -80,6 +80,9 @@ def main():
     # Optional AI one-liners — no-op unless ANTHROPIC_API_KEY is set.
     blurbs.attach_blurbs(players)
 
+    # Player news (enhancement — soft-fail, never trips the abort guards).
+    model.attach_news(players, sources.fetch_news(fixtures=args.fixtures))
+
     # Team-abbreviation safety: schedule keys come from ESPN (patched only by
     # ESPN_TEAM_FIX) while player teams come from Sleeper/FFC. An unmapped
     # abbreviation strands that team's players "ON BYE" all season, silently.

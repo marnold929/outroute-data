@@ -2,8 +2,8 @@ name: Daily rankings build
 
 on:
   schedule:
-    # Every day at 10:15 UTC (6:15am ET) — before most users wake up
-    - cron: "15 10 * * *"
+    # Twice daily: 9:00 and 21:00 UTC — morning rankings + evening news refresh
+    - cron: "0 9,21 * * *"
   workflow_dispatch: {}   # lets you run it manually from the Actions tab
   push:
     paths:

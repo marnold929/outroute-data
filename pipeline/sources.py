@@ -90,6 +90,25 @@ def fetch_schedule(year: int, fixtures: bool = False) -> dict:
     return schedule
 
 
+ESPN_NEWS_URL = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/news?limit=50"
+
+
+def fetch_news(fixtures: bool = False) -> list:
+    """ESPN league news articles. SOFT-FAIL by design: news is enhancement,
+    not core data — any error returns [] and the build publishes without it."""
+    if fixtures:
+        return []
+    try:
+        data = _get_json(ESPN_NEWS_URL)
+        articles = data.get("articles", [])
+        if not articles:
+            print("  WARNING: news fetch returned no articles; publishing without news")
+        return articles
+    except Exception as exc:
+        print(f"  WARNING: news fetch failed ({type(exc).__name__}: {exc}); publishing without news")
+        return []
+
+
 SLEEPER_STATS_URL = "https://api.sleeper.app/v1/stats/nfl/regular/{season}/{week}"
 
 
