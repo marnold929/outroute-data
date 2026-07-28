@@ -22,6 +22,13 @@ MIN_SCHEDULE_WEEKS = 17   # ESPN fetch degrades silently; never ship a gutted sc
 MIN_ADP_ENTRIES = 100     # half/std rank sources must have real coverage
 MIN_SLEEPER_MATCH = 0.60  # fraction of PPR players that must match a Sleeper record
 
+# Full-pool data-quality guards (v1.3): the union with Sleeper must deliver a
+# complete, position-balanced board. DST is exact (32 teams); the rest are floors.
+MIN_TOTAL = 400
+DST_EXACT = 32
+POS_FLOOR = {"K": 30, "RB": 80, "WR": 100, "QB": 40, "TE": 40}
+MAX_POS_TIER1 = 8   # a real positional tier 1 is never a giant bucket
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -106,6 +113,43 @@ def main():
     if len(players) < MIN_PLAYERS and not args.fixtures:
         print(f"ABORT: only {len(players)} players assembled (<{MIN_PLAYERS}); keeping previous file.")
         sys.exit(1)
+
+    # Full-pool + tiering data-quality guards.
+    from collections import Counter
+    pos_counts = Counter(p["p"] for p in players)
+    tier1_sizes = {pos: sum(1 for p in players if p["p"] == pos and p["pt"] == 1)
+                   for pos in ["QB", "RB", "WR", "TE", "K", "DST"]}
+    print("  positional tier sizes:")
+    for pos in ["QB", "RB", "WR", "TE", "K", "DST"]:
+        h = Counter(p["pt"] for p in players if p["p"] == pos)
+        print(f"    {pos}: n={pos_counts.get(pos, 0)} tiers={max(h) if h else 0} "
+              f"pt-hist={dict(sorted(h.items()))}")
+
+    # Tier-1 sanity runs ALWAYS (a broken tiering rule is a bug, fixtures or not).
+    tier1_over = {pos: n for pos, n in tier1_sizes.items() if n > MAX_POS_TIER1}
+    if tier1_over:
+        print(f"ABORT: positional tier 1 larger than {MAX_POS_TIER1} for {tier1_over}; "
+              "tiering rule regressed.")
+        sys.exit(1)
+
+    # Pool completeness runs on real builds (fixtures are intentionally tiny).
+    if not args.fixtures:
+        problems = []
+        if pos_counts.get("DST", 0) != DST_EXACT:
+            problems.append(f"DST={pos_counts.get('DST', 0)} (need exactly {DST_EXACT})")
+        for pos, floor in POS_FLOOR.items():
+            if pos_counts.get(pos, 0) < floor:
+                problems.append(f"{pos}={pos_counts.get(pos, 0)} (<{floor})")
+        if len(players) < MIN_TOTAL:
+            problems.append(f"total={len(players)} (<{MIN_TOTAL})")
+        if problems:
+            print("ABORT: full-pool guards failed — keeping previous file:")
+            for pr in problems:
+                print(f"  - {pr}")
+            sys.exit(1)
+        print(f"  full-pool guards OK: total={len(players)}, "
+              f"DST={pos_counts['DST']}, K={pos_counts['K']}, RB={pos_counts['RB']}, "
+              f"WR={pos_counts['WR']}, QB={pos_counts['QB']}, TE={pos_counts['TE']}")
 
     db = {
         "meta": {

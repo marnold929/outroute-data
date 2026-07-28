@@ -16,6 +16,7 @@ Output schema matches the iOS app's Player model exactly:
 from __future__ import annotations
 
 import re
+import statistics
 import unicodedata
 from datetime import datetime, timedelta, timezone
 
@@ -26,9 +27,52 @@ SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "v"}
 # Rank penalty (in overall-rank spots) by Sleeper injury status.
 INJURY_PENALTY = {"Questionable": 4, "Doubtful": 15, "Out": 30, "IR": 60, "PUP": 45, "Sus": 40, "COV": 10, "NA": 20}
 
-OVERALL_TIER_BOUNDS = [5, 16, 24, 36, 53, 63, 86, 102, 121, 142, 168, 200, 227, 258, 320]
-POS_TIER_GAP = {"QB": 6.0, "RB": 5.0, "WR": 5.0, "TE": 7.0, "K": 10.0, "DST": 10.0}
-POS_TIER_MAX = {"QB": 6, "RB": 10, "WR": 11, "TE": 8, "K": 4, "DST": 4}
+# Full-pool union (v1.3 data-quality fix): after the ADP-anchored market pool,
+# append every fantasy-relevant Sleeper active so the board isn't limited to
+# who shows up in mock drafts. Skill players need a real depth-chart spot at or
+# above these depths; kickers and the 32 team defenses come in wholesale.
+ADPLESS_DCO_MAX = {"QB": 3, "RB": 5, "WR": 6, "TE": 4}
+
+# Robust tiering: break a tier when the score gap to the next player exceeds
+# mean + K*std of recent gaps; keep tiers between MIN and MAX size and cap the
+# tier count so the tail lands in a single "everyone else" tier.
+POS_TIER_K = 1.2
+POS_TIER_MIN = 3
+POS_TIER_MAX_SIZE = 8
+POS_TIER_MAX_COUNT = 9
+OVERALL_TIER_K = 1.1
+OVERALL_TIER_MIN = 6
+OVERALL_TIER_MAX_SIZE = 60
+OVERALL_TIER_MAX_COUNT = 15
+
+
+def assign_tiers(scores, k, min_size, max_size, max_count):
+    """Given per-player scores in ascending (best-first) order, return a tier
+    number per player. A new tier starts when the gap to the previous player is
+    a strong outlier (gap > mean + k*std of the recent gaps), but only after the
+    current tier has `min_size`; a tier is force-broken at `max_size`; and no
+    more than `max_count` tiers are created (the last absorbs the tail)."""
+    n = len(scores)
+    if n == 0:
+        return []
+    tiers = [1] * n
+    tier, size, gaps = 1, 1, []
+    for i in range(1, n):
+        gap = scores[i] - scores[i - 1]
+        window = gaps[-12:]
+        threshold = None
+        if len(window) >= 3:
+            threshold = statistics.mean(window) + k * statistics.pstdev(window)
+        strong = threshold is not None and gap > threshold and gap > 1e-9
+        force = size >= max_size
+        allow = size >= min_size
+        if tier < max_count and (force or (allow and strong)):
+            tier += 1
+            size = 0
+        tiers[i] = tier
+        size += 1
+        gaps.append(gap)
+    return tiers
 
 
 def norm(name: str) -> str:
@@ -147,30 +191,103 @@ def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, tea
             "sid": sp.get("_pid"),   # matched Sleeper player id (null when unmatched)
             "_pid": sp.get("_pid"),
             "_sfx_score": (score + pen) * (0.55 if pos == "QB" else 1.0),
+            "_adpless": False,
         })
 
-    # Final ordering by adjusted score
+    # --- Full-pool union: append fantasy-relevant Sleeper actives with no ADP.
+    # They rank strictly below every ADP-anchored player (score above the market
+    # pool's max), ordered among themselves by a model reality score. adp is a
+    # sentinel set to their overall rank later; src stays 1 (Sleeper roster only,
+    # no market data claimed).
+    max_market_score = max((p["score"] for p in players), default=0.0)
+    adpless_base = max_market_score + 20.0
+
+    def reality(sp, pos):
+        dco = sp.get("depth_chart_order") or 9
+        pen = INJURY_PENALTY.get(sp.get("injury_status"), 0) if sp.get("injury_status") else 0
+        trend = trend_by_pid.get(sp.get("_pid")) or 0
+        return dco * 6 + pen - min(trend / 2000.0, 4.0)
+
+    def add_adpless(name, pos, team, sp, score, note=None, sid=None, pid=None):
+        players.append({
+            "n": name, "p": pos, "t": team,
+            "bye": byes.get(team),
+            "adp": None,                     # sentinel filled after ranking
+            "score": score,
+            "rh": None, "rs": None,          # no market half/standard rank
+            "note": note,
+            "src": 1,                        # Sleeper roster only — no market ADP
+            "sid": sid,
+            "_pid": pid,
+            "_sfx_score": score * (0.55 if pos == "QB" else 1.0),
+            "_adpless": True,
+        })
+
+    # 1) All 32 team defenses (dedup by team; match the existing "City Defense
+    #    D/ST" naming). Streamer DSTs after the ADP-anchored ones, trend-ordered.
+    dst_by_team = {p.get("team"): (pid, p) for pid, p in sleeper.items()
+                   if isinstance(p, dict) and p.get("position") == "DEF" and p.get("team")}
+    have_dst_teams = {p["t"] for p in players if p["p"] == "DST"}
+    for team in sorted(TEAM_NAMES):
+        if team in have_dst_teams:
+            continue
+        pid, sp = dst_by_team.get(team, (None, {}))
+        city = " ".join(TEAM_NAMES[team].split()[:-1])
+        trend = trend_by_pid.get(pid) or 0
+        add_adpless(f"{city} Defense D/ST", "DST", team, sp,
+                    adpless_base - min(trend / 2000.0, 4.0), pid=pid)
+
+    # 2) Kickers + skill actives from the Sleeper index not already in the pool.
+    for key, sp in sleeper_idx.items():
+        if key in seen:
+            continue
+        pos = key.rsplit("|", 1)[1]
+        team = sp.get("team")
+        if not team or team == "FA" or pos == "DST":
+            continue
+        if pos in ADPLESS_DCO_MAX:
+            dco = sp.get("depth_chart_order")
+            if not dco or dco > ADPLESS_DCO_MAX[pos]:
+                continue
+        name = sp.get("full_name")
+        if not name:
+            continue
+        nkey = norm(name)
+        if nkey in excluded:
+            continue
+        seen.add(key)
+        add_adpless(name, pos, team, sp, adpless_base + reality(sp, pos),
+                    note=injury_note(sp), sid=sp.get("_pid"), pid=sp.get("_pid"))
+
+    # Final ordering by adjusted score (ADP-less players sort below the market).
     players.sort(key=lambda p: p["score"])
     for i, p in enumerate(players):
         p["ro"] = i + 1
         p["rk"] = float(i + 1)
         p["id"] = f"p{i + 1:03d}"
 
-    # Position ranks + gap-based positional tiers
+    # ADP-less players get a sane late-draft sentinel = their overall rank, so
+    # DraftGrade's (adp - rank) gap is zero (never a false steal/reach) and no
+    # market data is implied beyond their model rank.
+    for p in players:
+        if p.pop("_adpless", False):
+            p["adp"] = float(p["ro"])
+
+    # Position ranks + robust std-dev-gap positional tiers.
     for pos in ["QB", "RB", "WR", "TE", "K", "DST"]:
         group = [p for p in players if p["p"] == pos]
-        gap = POS_TIER_GAP[pos]
-        tier, last_score = 1, None
+        tiers = assign_tiers([p["score"] for p in group],
+                             POS_TIER_K, POS_TIER_MIN, POS_TIER_MAX_SIZE, POS_TIER_MAX_COUNT)
         for j, p in enumerate(group):
             p["pr"] = j + 1
-            if last_score is not None and (p["score"] - last_score) > gap:
-                tier = min(tier + 1, POS_TIER_MAX[pos])
-            p["pt"] = tier
-            last_score = p["score"]
+            p["pt"] = tiers[j]
 
-    # Overall tiers by rank bands
-    for p in players:
-        p["tier"] = next((t + 1 for t, b in enumerate(OVERALL_TIER_BOUNDS) if p["ro"] <= b), 15)
+    # Overall tiers by the same discipline, over the overall score order.
+    overall_tiers = assign_tiers([p["score"] for p in players],
+                                 OVERALL_TIER_K, OVERALL_TIER_MIN,
+                                 OVERALL_TIER_MAX_SIZE, OVERALL_TIER_MAX_COUNT)
+    for p, t in zip(players, overall_tiers):
+        p["tier"] = t
 
     # Superflex top-50
     sfx_sorted = sorted(players, key=lambda p: p["_sfx_score"])[:50]
