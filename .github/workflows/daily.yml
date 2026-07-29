@@ -2,8 +2,9 @@ name: Daily rankings build
 
 on:
   schedule:
-    # Twice daily: 9:00 and 21:00 UTC — morning rankings + evening news refresh
-    - cron: "0 9,21 * * *"
+    # Every 4 hours (00,04,08,12,16,20 UTC) — keeps rankings + player news fresh
+    # through the day; worst-case staleness ~4h + one build's runtime.
+    - cron: "0 */4 * * *"
   workflow_dispatch: {}   # lets you run it manually from the Actions tab
   push:
     paths:
@@ -37,6 +38,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No changes today."
           else
-            git commit -m "Daily rankings update $(date -u +%F)"
+            git commit -m "Rankings update $(date -u +'%F %H:%MZ')"
             git push
           fi
