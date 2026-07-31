@@ -1,33 +1,143 @@
 <!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OutRoute — Privacy Policy</title>
-<style>body{font-family:-apple-system,system-ui,sans-serif;max-width:680px;margin:40px auto;padding:0 20px;line-height:1.6;color:#1a1a2e}h1{color:#080E28}h2{margin-top:2em}</style></head>
+<style>
+  :root { --ink:#1a2230; --muted:#5b6474; --line:#e4e7ee; --accent:#12674a; --bg:#f7f8fa; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+  .wrap { max-width:720px; margin:0 auto; padding:32px 22px 80px; }
+  header.top { border-bottom:2px solid var(--accent); padding-bottom:14px; margin-bottom:8px; }
+  header.top .brand { font-weight:800; letter-spacing:.02em; color:var(--accent); font-size:15px; text-transform:uppercase; }
+  h1 { font-size:30px; line-height:1.2; margin:14px 0 4px; }
+  .updated { color:var(--muted); font-size:14px; margin-bottom:28px; }
+  h2 { font-size:19px; margin:34px 0 8px; }
+  h3 { font-size:16px; margin:20px 0 4px; }
+  p, li { color:#28313f; }
+  a { color:var(--accent); }
+  ul { padding-left:22px; }
+  li { margin:5px 0; }
+  .note { background:#fff; border:1px solid var(--line); border-radius:12px; padding:14px 18px; margin:22px 0; font-size:15px; color:var(--muted); }
+  footer { margin-top:48px; padding-top:18px; border-top:1px solid var(--line); color:var(--muted); font-size:13px; }
+</style>
+</head>
 <body>
-<h1>OutRoute Privacy Policy</h1>
-<p><em>Effective July 17, 2026</em></p>
-<p>OutRoute is built to know a lot about fantasy football and nothing about you.</p>
-<h2>What we collect</h2>
-<p><strong>Nothing.</strong> OutRoute has no accounts, no sign-up, no analytics SDKs, no advertising, and no tracking of any kind. We do not collect, store, transmit, sell, or share any personal information. The one optional exception is The Analyst chat feature, described below — and nothing there happens unless you use it.</p>
-<h2>What stays on your device</h2>
-<p>Your league settings, roster, draft board, waiver list, and (if you use league sync) your league ID and any ESPN session cookies you enter are stored only on your device, in the app's private storage. They are never sent to us — we have no servers that receive user data.</p>
-<h2>Network requests the app makes</h2>
-<ul>
-<li><strong>Rankings feed:</strong> the app downloads a public player-rankings file (a static JSON document). This request contains no personal information.</li>
-<li><strong>Sleeper API:</strong> if you use Sleeper league sync or trending data, the app calls Sleeper's public API directly from your device using the username or league you specify.</li>
-<li><strong>ESPN league sync:</strong> if you connect an ESPN league, the app calls ESPN's league API directly from your device, using the league ID (and, for private leagues, the session cookies) you provide. These credentials go only from your device to ESPN and are stored only on your device.</li>
-</ul>
-<h2>AI Analyst (optional feature)</h2>
-<p>The Analyst is an optional in-app chat. If — and only if — you use it:</p>
-<ul>
-<li><strong>What is sent:</strong> the chat messages you type and a summary of your league context (league settings, roster, and waiver list) are sent to our server and relayed to an AI provider (Anthropic) to generate the reply. We do not store your messages or league context; they are processed to produce the response.</li>
-<li><strong>Device ID:</strong> an anonymous, app-generated device identifier is used to track your Analyst credit balance. It is random, created by the app, and not tied to your name, Apple ID, or any account.</li>
-<li><strong>Purchases:</strong> Analyst credit purchases are processed by Apple through the App Store. We never see your payment details.</li>
-<li><strong>If you never open The Analyst,</strong> none of the above happens — no messages, no league summary, and no device ID ever leave your phone.</li>
-</ul>
-<h2>Children</h2>
-<p>OutRoute does not knowingly collect information from anyone, including children.</p>
-<h2>Changes</h2>
-<p>If this policy changes, the updated version will be posted at this URL with a new effective date.</p>
-<h2>Contact</h2>
-<p>Questions: <a href="mailto:matthewarnoldlmbt@gmail.com">matthewarnoldlmbt@gmail.com</a></p>
-</body></html>
+<div class="wrap">
+  <header class="top"><span class="brand">OutRoute</span></header>
+  <h1>Privacy Policy</h1>
+  <div class="updated">Last updated: July 30, 2026</div>
+
+  <p>OutRoute is a fantasy football draft and analysis app. It is built to be
+  useful without knowing who you are — there are no accounts, no sign-ups, and
+  no personal profile. This policy explains the limited information the app
+  does handle, where it goes, and why. If a practice ever changes, we will
+  update this page and the date above.</p>
+
+  <h2>1. No account, no identity</h2>
+  <p>You do not create an account or give us your name, email, phone number, or
+  address to use OutRoute. We do not ask you to log into OutRoute itself, and we
+  do not build a profile of you.</p>
+
+  <h2>2. Information the app handles</h2>
+
+  <h3>Anonymous device identifier and credit balance</h3>
+  <p>When you use the AI "Analyst" feature, the app creates a random identifier
+  for your device. Our server (hosted on Cloudflare) uses that identifier only
+  to keep track of how many Analyst credits your device has. This identifier is
+  not your name, your Apple ID, or your advertising ID, and it is not linked to
+  your identity. Because it is tied to the device, deleting and reinstalling the
+  app, or switching devices, starts a new identifier — see "Your choices" below.</p>
+
+  <h3>Analyst requests</h3>
+  <p>When you ask the Analyst a question, the app sends the context needed to
+  answer it — such as your league settings, your roster, and relevant injury,
+  waiver, or news information — to our server, which relays it to Anthropic
+  (the maker of Claude) to generate a response. We do not store the content of
+  your Analyst conversations on our server; it is processed to produce your
+  answer and to enforce basic rate limits. Anthropic processes these requests
+  under its own commercial terms and does not use them to train its models.</p>
+
+  <h3>League connections (ESPN, Yahoo, Sleeper)</h3>
+  <p>If you connect a fantasy league, the app stores only what is needed to read
+  that league's data — for example a session cookie or a public league ID —
+  <strong>on your device</strong>. We never ask for, collect, or transmit your
+  ESPN, Yahoo, or Sleeper password. Sleeper information is read from publicly
+  available league data.</p>
+
+  <h3>Player rankings</h3>
+  <p>The app downloads our public player-rankings feed. Fetching it does not send
+  any personal information about you.</p>
+
+  <h3>Purchases</h3>
+  <p>Subscriptions, the lifetime option, and credit packs are processed by Apple
+  through the App Store. Apple handles your payment; we never see or store your
+  card details. To unlock access and grant credits, our server receives the
+  purchase's transaction identifier from Apple and verifies it with Apple.</p>
+
+  <h2>3. What we do not collect</h2>
+  <ul>
+    <li>No name, email, phone number, or mailing address.</li>
+    <li>No precise location, contacts, photos, or microphone/camera access.</li>
+    <li>No advertising identifier (IDFA) and no third-party ad tracking.</li>
+    <li>No third-party analytics or behavioral-tracking SDKs.</li>
+    <li>We do not sell, rent, or trade your information to anyone.</li>
+  </ul>
+
+  <h2>4. Service providers</h2>
+  <p>OutRoute relies on a small number of providers to function. Each processes
+  only what is described above:</p>
+  <ul>
+    <li><strong>Apple</strong> — App Store distribution and payments
+      (<a href="https://www.apple.com/legal/privacy/">privacy policy</a>).</li>
+    <li><strong>Cloudflare</strong> — hosting for our server and credit ledger
+      (<a href="https://www.cloudflare.com/privacypolicy/">privacy policy</a>).</li>
+    <li><strong>Anthropic</strong> — the AI that powers the Analyst
+      (<a href="https://www.anthropic.com/legal/privacy">privacy policy</a>).</li>
+  </ul>
+
+  <h2>5. Data retention</h2>
+  <p>Your device's credit balance is kept on our server so your credits persist
+  between sessions. We do not retain the content of Analyst conversations after
+  the response is produced. Temporary technical values used to prevent abuse
+  (such as rate-limit counters) expire automatically within minutes to a couple
+  of days.</p>
+
+  <h2>6. Your choices</h2>
+  <p>OutRoute stores your league connections and settings on your device;
+  deleting the app removes them. Your Analyst credit balance is associated with
+  your device identifier — because there is no account, credits do not transfer
+  to a new device and are not restored by reinstalling. You can manage or cancel
+  a subscription at any time in your Apple ID settings. To ask a question about
+  your information, contact us using the details below.</p>
+
+  <h2>7. Children's privacy</h2>
+  <p>OutRoute is not directed to children under 13, and we do not knowingly
+  collect information from children. If you believe a child has provided
+  information through the app, contact us and we will address it.</p>
+
+  <h2>8. Security</h2>
+  <p>Connections between the app and our server use encryption in transit
+  (HTTPS). Because we minimize what we collect and never handle passwords or
+  payment details, the amount of information at risk is deliberately small. No
+  method of transmission or storage is perfectly secure, and we cannot guarantee
+  absolute security.</p>
+
+  <h2>9. Changes to this policy</h2>
+  <p>If we make material changes, we will post the updated policy here and revise
+  the "Last updated" date. Continued use of OutRoute after a change means you
+  accept the revised policy.</p>
+
+  <h2>10. Contact</h2>
+  <p>Questions about this policy or your information: <a href="mailto:matthewarnoldlmbt@gmail.com">matthewarnoldlmbt@gmail.com</a>.</p>
+
+  <footer>
+    © 2026 OutRoute. OutRoute is an independent app and is not affiliated with,
+    endorsed by, or sponsored by ESPN, Yahoo, Sleeper, the NFL, or any of their
+    affiliates.
+  </footer>
+</div>
+</body>
+</html>
