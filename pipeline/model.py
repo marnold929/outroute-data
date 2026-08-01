@@ -44,6 +44,9 @@ OVERALL_TIER_K = 1.1
 OVERALL_TIER_MIN = 6
 OVERALL_TIER_MAX_SIZE = 60
 OVERALL_TIER_MAX_COUNT = 15
+# The draftable board: 12 teams x ~15-16 rounds. build.py guards that this many
+# top-ranked players are backed by real market ADP (not the add_adpless sentinel).
+DRAFTABLE_N = 200
 
 
 def assign_tiers(scores, k, min_size, max_size, max_count):
@@ -266,6 +269,18 @@ def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, tea
         p["rk"] = float(i + 1)
         p["id"] = f"p{i + 1:03d}"
 
+    # Draftable-range ADP coverage stat, computed BEFORE _adpless is popped:
+    # how much of the top-DRAFTABLE_N board (by overall rank) carries real,
+    # non-sentinel market ADP. Reported out so build.py can guard the property
+    # we actually care about — that the draftable board is market-driven — off
+    # the authoritative flag rather than an adp==ro equality heuristic (a real
+    # ADP can legitimately equal a player's ro and would be undercounted).
+    draftable = [p for p in players if p["ro"] <= DRAFTABLE_N]
+    stats = {
+        "draftable_n": len(draftable),
+        "draftable_real_adp": sum(1 for p in draftable if not p.get("_adpless", False)),
+    }
+
     # ADP-less players get a sane late-draft sentinel = their overall rank, so
     # DraftGrade's (adp - rank) gap is zero (never a false steal/reach) and no
     # market data is implied beyond their model rank.
@@ -296,7 +311,7 @@ def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, tea
         p["sfx"] = sfx_lookup.get(p["id"])
         del p["_sfx_score"], p["score"]
 
-    return players
+    return players, stats
 
 
 def attach_usage(players, weeks_stats, season, current_season):

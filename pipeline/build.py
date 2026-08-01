@@ -19,8 +19,14 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 SEASON_YEAR = 2026  # bump each season (also refresh pipeline/byes.json)
 MIN_PLAYERS = 150   # safety: never publish a suspiciously small file
 MIN_SCHEDULE_WEEKS = 17   # ESPN fetch degrades silently; never ship a gutted schedule
-MIN_ADP_ENTRIES = 100     # half/std rank sources must have real coverage
+MIN_ADP_ENTRIES = 100     # ppr/half/std rank sources must have real coverage
 MIN_SLEEPER_MATCH = 0.60  # fraction of PPR players that must match a Sleeper record
+# Fraction of the top-DRAFTABLE_N board that must carry real (non-sentinel) ADP.
+# A ratio, not an absolute count: FFC's pool size drifts through the offseason
+# and the Sleeper union pads totals, so any fixed count is too loose in August or
+# a false alarm in June. This asserts the property we care about — a market-driven
+# draftable board. Today's live feed runs ~98% (196/200).
+MIN_DRAFTABLE_ADP_RATIO = 0.90
 
 # Full-pool data-quality guards (v1.3): the union with Sleeper must deliver a
 # complete, position-balanced board. DST is exact (32 teams); the rest are floors.
@@ -55,9 +61,14 @@ def main():
             print(f"ABORT: schedule has only {len(schedule)} weeks "
                   f"(<{MIN_SCHEDULE_WEEKS}); ESPN fetch degraded — keeping previous file.")
             sys.exit(1)
-        if len(adp_half) < MIN_ADP_ENTRIES or len(adp_std) < MIN_ADP_ENTRIES:
-            print(f"ABORT: ADP coverage too thin (half={len(adp_half)}, "
-                  f"std={len(adp_std)}, need {MIN_ADP_ENTRIES} each); keeping previous file.")
+        # adp_ppr is the ONLY source that populates the emitted market `adp`
+        # (model.py); guard it alongside half/std, or a thin PPR feed silently
+        # drops the whole board onto the add_adpless sentinel.
+        if (len(adp_ppr) < MIN_ADP_ENTRIES or len(adp_half) < MIN_ADP_ENTRIES
+                or len(adp_std) < MIN_ADP_ENTRIES):
+            print(f"ABORT: ADP coverage too thin (ppr={len(adp_ppr)}, "
+                  f"half={len(adp_half)}, std={len(adp_std)}, need {MIN_ADP_ENTRIES} "
+                  f"each); keeping previous file.")
             sys.exit(1)
 
     # Usage stats: prefer the current season as soon as real games exist, else last season.
@@ -68,7 +79,23 @@ def main():
         weeks_stats = sources.fetch_season_stats(stats_season, fixtures=args.fixtures)
     print(f"  usage stats: season={stats_season} weeks_with_games={len(weeks_stats)}")
 
-    players = model.assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides)
+    players, adp_stat = model.assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides)
+
+    # Draftable-range ADP ratio guard — the layer that actually matters. Even
+    # when adp_ppr passes the source-count check above, a degraded PPR feed can
+    # still leave most of the *draftable* board on the sentinel. Abort unless the
+    # top-N board is overwhelmingly backed by real market ADP (based on model's
+    # _adpless flag, not an adp==ro heuristic).
+    dn = adp_stat["draftable_n"]
+    real = adp_stat["draftable_real_adp"]
+    ratio = real / dn if dn else 0.0
+    print(f"  draftable ADP coverage: {real}/{dn} = {ratio:.0%} real "
+          f"(need {MIN_DRAFTABLE_ADP_RATIO:.0%})")
+    if not args.fixtures and ratio < MIN_DRAFTABLE_ADP_RATIO:
+        print(f"ABORT: ADP coverage too thin in draftable range "
+              f"({real}/{dn} = {ratio:.0%} real, need {MIN_DRAFTABLE_ADP_RATIO:.0%}); "
+              f"keeping previous file.")
+        sys.exit(1)
 
     # Sleeper match-rate guard — must run before attach_usage consumes _pid.
     if players:
