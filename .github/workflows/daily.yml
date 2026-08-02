@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: write
+  issues: write           # the alerting steps at the bottom open/close an issue
 
 jobs:
   build:
@@ -28,7 +29,11 @@ jobs:
           # Optional — when this repo secret is set, the build adds AI one-line
           # takes ("ai" field). Absent/invalid keys skip cleanly.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: python pipeline/build.py
+        run: |
+          # pipefail so tee doesn't swallow build.py's exit code — without it a
+          # tripped guard would exit 1 into tee and the step would pass green.
+          set -o pipefail
+          python pipeline/build.py 2>&1 | tee "$RUNNER_TEMP/build.log"
 
       - name: Commit & publish if changed
         run: |
@@ -41,3 +46,112 @@ jobs:
             git commit -m "Rankings update $(date -u +'%F %H:%MZ')"
             git push
           fi
+
+      # ---------------------------------------------------------------------
+      # Alerting.
+      #
+      # build.py already refuses to publish bad data — it has nine guards and
+      # every one of them prints "ABORT: ..." and exits 1 rather than writing a
+      # degraded file. What it could not do is tell anyone. A scheduled run that
+      # goes red is invisible unless you happen to open the Actions tab, so the
+      # feed can sit frozen for days during the season and look fine.
+      #
+      # These two steps close that loop: file one issue when it breaks, close it
+      # when it recovers. GitHub emails the repo owner on both.
+      # ---------------------------------------------------------------------
+      - name: Open an issue if the build failed
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const TITLE = 'Rankings pipeline is failing';
+            const { owner, repo } = context.repo;
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${owner}/${repo}`
+                         + `/actions/runs/${context.runId}`;
+
+            // Say *why*, not just that something went red. Every guard prints a
+            // line starting with ABORT; if there is no log at all the job died
+            // before Python ran (checkout, setup-python, or the runner itself).
+            let detail;
+            const log = `${process.env.RUNNER_TEMP}/build.log`;
+            if (fs.existsSync(log)) {
+              const lines = fs.readFileSync(log, 'utf8').split('\n');
+              const aborts = lines.filter(l => l.startsWith('ABORT'));
+              detail = (aborts.length ? aborts
+                                      : lines.filter(l => l.trim()).slice(-20)).join('\n');
+            } else {
+              detail = 'No build log — the job failed before pipeline/build.py ran '
+                     + '(checkout, Python setup, or the runner itself).';
+            }
+
+            const body = [
+              'The 4-hourly rankings build failed.',
+              '',
+              '**The app is not broken.** Every guard in `pipeline/build.py` exits before',
+              'writing, so the previously published `docs/players.json` is still live and',
+              'still being served to every install. What has stopped is the *refresh* — the',
+              'feed is frozen at whatever it last published, and aging.',
+              '',
+              `Failed run: ${runUrl}`,
+              '',
+              '```',
+              detail,
+              '```',
+              '',
+              'An `ABORT:` line means a data-quality guard tripped — almost always an upstream',
+              '(Fantasy Football Calculator, Sleeper, ESPN) that is down, rate-limiting, or',
+              'returning a thin response. Those usually clear on their own within a cycle or',
+              'two, and the guard doing its job is the system working. Anything else is a code',
+              'or runner problem and will not fix itself.',
+              '',
+              'This issue closes automatically on the next successful build.',
+            ].join('\n');
+
+            // The job runs every 4 hours. Without this a weekend-long upstream
+            // outage files ~18 identical issues.
+            const open = await github.paginate(github.rest.issues.listForRepo,
+              { owner, repo, state: 'open', per_page: 100 });
+            const existing = open.find(i => !i.pull_request && i.title === TITLE);
+
+            // Belt and braces: the run page itself carries the reason, so the
+            // alert still lands even if Issues are disabled on this repo.
+            await core.summary
+              .addHeading('Rankings build failed', 2)
+              .addRaw(`<pre>${detail.replace(/[<&]/g, c => c === '<' ? '&lt;' : '&amp;')}</pre>`)
+              .write();
+
+            if (existing) {
+              core.info(`Already open as #${existing.number} — not filing a duplicate.`);
+              return;
+            }
+            try {
+              const issue = await github.rest.issues.create({ owner, repo, title: TITLE, body });
+              core.info(`Filed #${issue.data.number}`);
+            } catch (e) {
+              // Don't let a failed alert mask the real failure above it.
+              core.error(`Could not file the alert issue (${e.status}: ${e.message}). `
+                       + 'Are Issues enabled on this repo?');
+            }
+
+      - name: Close the alert issue once the build is healthy again
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const TITLE = 'Rankings pipeline is failing';
+            const { owner, repo } = context.repo;
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${owner}/${repo}`
+                         + `/actions/runs/${context.runId}`;
+            const open = await github.paginate(github.rest.issues.listForRepo,
+              { owner, repo, state: 'open', per_page: 100 });
+            for (const i of open.filter(i => !i.pull_request && i.title === TITLE)) {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: i.number,
+                body: `Recovered — the build succeeded and published again: ${runUrl}`,
+              });
+              await github.rest.issues.update({
+                owner, repo, issue_number: i.number, state: 'closed',
+              });
+              core.info(`Closed #${i.number}`);
+            }
