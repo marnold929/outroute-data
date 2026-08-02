@@ -190,6 +190,7 @@ def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, tea
             "rh": half_ranks.get(key),
             "rs": std_ranks.get(key),
             "note": note,
+            "st": status,          # raw Sleeper injury_status, machine-readable
             "src": 1 + (1 if sp else 0) + (1 if key in half_ranks else 0) + (1 if key in std_ranks else 0),
             "sid": sp.get("_pid"),   # matched Sleeper player id (null when unmatched)
             "_pid": sp.get("_pid"),
@@ -219,6 +220,7 @@ def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, tea
             "score": score,
             "rh": None, "rs": None,          # no market half/standard rank
             "note": note,
+            "st": sp.get("injury_status"),   # raw Sleeper injury_status
             "src": 1,                        # Sleeper roster only — no market ADP
             "sid": sid,
             "_pid": pid,
