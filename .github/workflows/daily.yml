@@ -2,9 +2,13 @@ name: Daily rankings build
 
 on:
   schedule:
-    # Every 4 hours (00,04,08,12,16,20 UTC) — keeps rankings + player news fresh
-    # through the day; worst-case staleness ~4h + one build's runtime.
-    - cron: "0 */4 * * *"
+    # Every 4 hours (UTC) — keeps rankings + league/player news fresh through
+    # the day; worst-case staleness ~4h + one build's runtime.
+    #
+    # Minute 17, not 0, on GitHub's own advice: everyone schedules on the hour,
+    # and runs queued at the most contended minute get delayed or dropped
+    # outright. A dropped run means a stale feed nobody is told about.
+    - cron: "17 */4 * * *"
   workflow_dispatch: {}   # lets you run it manually from the Actions tab
   push:
     paths:
