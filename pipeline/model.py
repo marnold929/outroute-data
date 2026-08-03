@@ -367,6 +367,7 @@ TEAM_NAMES = {
 
 NEWS_MAX_AGE_DAYS = 10
 NEWS_PER_PLAYER = 3
+LEAGUE_NEWS_MAX = 30
 
 
 def attach_news(players, articles):
@@ -430,3 +431,49 @@ def attach_news(players, articles):
             matched += 1
     print(f"  news: attached to {matched} players from {len(articles)} articles")
     return matched
+
+
+def league_news(articles):
+    """The around-the-league reading list, published at the top level of
+    players.json as "news". Same {h,d,u} item shape attach_news writes per
+    player, so the client decodes one type for both.
+
+    The difference from attach_news is what gets kept: attach_news throws away
+    every article it cannot pin to a player, which is most of them. A reading
+    list wants those — a coaching change or a trade is exactly the news someone
+    opens the app for, and it belongs to no single player.
+
+    Deliberately does NOT share attach_news's parsing. That function feeds the
+    shipped per-player path and is not exercised by any test; duplicating ten
+    lines is cheaper than risking it, same reasoning as /redeem and /subgrant
+    in the worker. Soft-fail like the rest of this path: bad input yields [].
+    """
+    if not articles:
+        print("  league news: skipped (no articles)")
+        return []
+    cutoff = datetime.now(timezone.utc) - timedelta(days=NEWS_MAX_AGE_DAYS)
+    seen, rows, skipped = set(), [], 0
+    for a in articles:
+        headline = (a.get("headline") or "").strip()
+        pub = a.get("published") or ""
+        url = ((a.get("links") or {}).get("web") or {}).get("href")
+        if not headline or not pub or not url or url in seen:
+            skipped += 1
+            continue
+        try:
+            published = datetime.fromisoformat(pub.replace("Z", "+00:00"))
+        except ValueError:
+            skipped += 1
+            continue
+        if published.tzinfo is None:
+            published = published.replace(tzinfo=timezone.utc)
+        if published < cutoff:
+            skipped += 1
+            continue
+        seen.add(url)
+        rows.append((published, {"h": headline[:140], "d": pub, "u": url}))
+    rows.sort(key=lambda r: r[0], reverse=True)
+    out = [item for _, item in rows[:LEAGUE_NEWS_MAX]]
+    print(f"  league news: {len(out)} items from {len(articles)} articles "
+          f"({skipped} skipped: stale, duplicate, or malformed)")
+    return out

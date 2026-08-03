@@ -8,6 +8,7 @@ Sources:
 import json
 import pathlib
 import urllib.request
+from datetime import datetime, timedelta, timezone
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 UA = {"User-Agent": "OutRoute-data-pipeline/1.0 (+github actions daily build)"}
@@ -97,7 +98,20 @@ def fetch_news(fixtures: bool = False) -> list:
     """ESPN league news articles. SOFT-FAIL by design: news is enhancement,
     not core data — any error returns [] and the build publishes without it."""
     if fixtures:
-        return []
+        path = ROOT / "fixtures" / "espn_news.json"
+        if not path.exists():
+            return []
+        articles = json.loads(path.read_text()).get("articles", [])
+        # Fixture articles store an age instead of a date, rebased at read time,
+        # so the ten-day freshness cutoff keeps being exercised however old the
+        # file gets. A fixture that silently ages out of every test is worse
+        # than no fixture.
+        now = datetime.now(timezone.utc)
+        for a in articles:
+            hours = a.pop("_hours_ago", None)
+            if hours is not None:
+                a["published"] = (now - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return articles
     try:
         data = _get_json(ESPN_NEWS_URL)
         articles = data.get("articles", [])

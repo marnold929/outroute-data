@@ -114,8 +114,12 @@ def main():
     # Optional AI one-liners — no-op unless ANTHROPIC_API_KEY is set.
     blurbs.attach_blurbs(players)
 
-    # Player news (enhancement — soft-fail, never trips the abort guards).
-    model.attach_news(players, sources.fetch_news(fixtures=args.fixtures))
+    # News (enhancement — soft-fail, never trips the abort guards). One fetch
+    # feeds two consumers: items pinned to a player, and the league-wide reading
+    # list. Previously everything unmatched was fetched and then dropped.
+    articles = sources.fetch_news(fixtures=args.fixtures)
+    model.attach_news(players, articles)
+    league = model.league_news(articles)
 
     # Team-abbreviation safety: schedule keys come from ESPN (patched only by
     # ESPN_TEAM_FIX) while player teams come from Sleeper/FFC. An unmapped
@@ -191,6 +195,9 @@ def main():
         },
         "players": players,
         "schedule": schedule,
+        # Additive: older app builds decode PlayerDatabase with synthesized
+        # Codable, which ignores keys it does not know about.
+        "news": league,
     }
     out = pathlib.Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

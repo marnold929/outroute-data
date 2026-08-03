@@ -1,0 +1,107 @@
+{
+  "_comment": "Offline fixture for fetch_news(fixtures=True). Dates are _hours_ago offsets rebased at read time \u2014 see sources.fetch_news.",
+  "articles": [
+    {
+      "headline": "Ja'Marr Chase sets camp tone with dominant week",
+      "links": {
+        "web": {
+          "href": "https://www.espn.com/nfl/story/_/id/1/fixture"
+        }
+      },
+      "categories": [
+        {
+          "type": "athlete",
+          "athleteId": 1000,
+          "description": "Ja'Marr Chase"
+        },
+        {
+          "type": "team",
+          "description": "Cincinnati Bengals"
+        }
+      ],
+      "_hours_ago": 2
+    },
+    {
+      "headline": "Bijan Robinson in line for career-high workload",
+      "links": {
+        "web": {
+          "href": "https://www.espn.com/nfl/story/_/id/2/fixture"
+        }
+      },
+      "categories": [
+        {
+          "type": "athlete",
+          "athleteId": 1000,
+          "description": "Bijan Robinson"
+        },
+        {
+          "type": "team",
+          "description": "Atlanta Falcons"
+        }
+      ],
+      "_hours_ago": 5
+    },
+    {
+      "headline": "NFL approves rule change to kickoff formation",
+      "links": {
+        "web": {
+          "href": "https://www.espn.com/nfl/story/_/id/3/fixture"
+        }
+      },
+      "categories": [],
+      "_hours_ago": 8
+    },
+    {
+      "headline": "Five coaching staffs already on the hot seat",
+      "links": {
+        "web": {
+          "href": "https://www.espn.com/nfl/story/_/id/4/fixture"
+        }
+      },
+      "categories": [],
+      "_hours_ago": 26
+    },
+    {
+      "headline": "Ja'Marr Chase sets camp tone with dominant week",
+      "links": {
+        "web": {
+          "href": "https://www.espn.com/nfl/story/_/id/1/fixture"
+        }
+      },
+      "categories": [
+        {
+          "type": "athlete",
+          "athleteId": 1000,
+          "description": "Ja'Marr Chase"
+        }
+      ],
+      "_hours_ago": 3
+    },
+    {
+      "headline": "Headline with no link at all",
+      "links": {},
+      "categories": [],
+      "_hours_ago": 4
+    },
+    {
+      "headline": "Sixteen days ago, nobody cares anymore",
+      "links": {
+        "web": {
+          "href": "https://www.espn.com/nfl/story/_/id/7/fixture"
+        }
+      },
+      "categories": [],
+      "_hours_ago": 400
+    },
+    {
+      "headline": "Published date is garbage",
+      "links": {
+        "web": {
+          "href": "https://www.espn.com/nfl/story/_/id/8/fixture"
+        }
+      },
+      "categories": [],
+      "published": "not-a-date"
+    }
+  ]
+}
