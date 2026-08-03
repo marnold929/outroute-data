@@ -386,12 +386,17 @@ def attach_news(players, articles):
             by_name.setdefault(norm(p["n"]), p)
 
     per_player: dict[str, list] = {}
+    seen_urls = set()
     for a in articles:
         headline = (a.get("headline") or "").strip()
         pub = a.get("published") or ""
         url = ((a.get("links") or {}).get("web") or {}).get("href")
-        if not headline or not pub or not url:
+        # Same URL twice in one payload used to attach the same headline to the
+        # player twice, which reads as a broken card. ESPN has repeated an
+        # article across its news list before; drop the repeat, keep the first.
+        if not headline or not pub or not url or url in seen_urls:
             continue
+        seen_urls.add(url)
         try:
             published = datetime.fromisoformat(pub.replace("Z", "+00:00"))
         except ValueError:
