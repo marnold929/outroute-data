@@ -27,6 +27,19 @@ SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "v"}
 # Rank penalty (in overall-rank spots) by Sleeper injury status.
 INJURY_PENALTY = {"Questionable": 4, "Doubtful": 15, "Out": 30, "IR": 60, "PUP": 45, "Sus": 40, "COV": 10, "NA": 20}
 
+# NFL 2026 regular season kicks off Wed Sep 9 2026, 8:20pm ET — Seahawks host
+# Patriots in an unusual Wednesday opener (verified: en.wikipedia.org/wiki/2026_NFL_season).
+# BEFORE kickoff, preseason injury designations predict almost nothing — the market
+# has already priced them — so injury status still produces the note and the `st`
+# field but does NOT contribute to `score`. On/after kickoff, INJURY_PENALTY applies
+# exactly as before.
+SEASON_START = datetime(2026, 9, 9, 20, 20, tzinfo=timezone(timedelta(hours=-4)))
+
+
+def injuries_move_rank(now: datetime | None = None) -> bool:
+    """True once the season has kicked off — only then does injury status move `score`."""
+    return (now or datetime.now(timezone.utc)) >= SEASON_START
+
 # Full-pool union (v1.3 data-quality fix): after the ADP-anchored market pool,
 # append every fantasy-relevant Sleeper active so the board isn't limited to
 # who shows up in mock drafts. Skill players need a real depth-chart spot at or
@@ -126,6 +139,7 @@ def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, tea
     sleeper_idx = build_sleeper_index(sleeper)
     trend_by_pid = {t["player_id"]: t["count"] for t in trending if isinstance(t, dict)}
     excluded = {norm(n) for n in overrides.get("exclude", [])}
+    injuries_live = injuries_move_rank()   # preseason: injuries annotate but don't move score
 
     def fmt_rank_map(entries):
         out = {}
@@ -166,7 +180,8 @@ def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, tea
         pen = 0
         status = sp.get("injury_status")
         if status:
-            pen = INJURY_PENALTY.get(status, 8)
+            if injuries_live:
+                pen = INJURY_PENALTY.get(status, 8)
             note = injury_note(sp)
         # 2) depth-chart reality check: priced like a starter but buried on depth chart
         dco = sp.get("depth_chart_order")
@@ -208,7 +223,7 @@ def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, tea
 
     def reality(sp, pos):
         dco = sp.get("depth_chart_order") or 9
-        pen = INJURY_PENALTY.get(sp.get("injury_status"), 0) if sp.get("injury_status") else 0
+        pen = INJURY_PENALTY.get(sp.get("injury_status"), 0) if (injuries_live and sp.get("injury_status")) else 0
         trend = trend_by_pid.get(sp.get("_pid")) or 0
         return dco * 6 + pen - min(trend / 2000.0, 4.0)
 
