@@ -222,6 +222,7 @@ def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, tea
             "rs": std_ranks.get(key),
             "note": note,
             "st": status,          # raw Sleeper injury_status, machine-readable
+            "dc": dco,             # Sleeper depth_chart_order (null when unknown)
             "src": 1 + (1 if sp else 0) + (1 if key in half_ranks else 0) + (1 if key in std_ranks else 0),
             "sid": sp.get("_pid"),   # matched Sleeper player id (null when unmatched)
             "_pid": sp.get("_pid"),
@@ -252,6 +253,7 @@ def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, tea
             "rh": None, "rs": None,          # no market half/standard rank
             "note": note,
             "st": sp.get("injury_status"),   # raw Sleeper injury_status
+            "dc": sp.get("depth_chart_order"),  # Sleeper depth_chart_order (null when unknown)
             "src": 1,                        # Sleeper roster only — no market ADP
             "sid": sid,
             "_pid": pid,
@@ -316,10 +318,14 @@ def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, tea
 
     # ADP-less players get a sane late-draft sentinel = their overall rank, so
     # DraftGrade's (adp - rank) gap is zero (never a false steal/reach) and no
-    # market data is implied beyond their model rank.
+    # market data is implied beyond their model rank. Market players instead get
+    # `os` — our own ADP-scale number (the internal score) — so the app can show
+    # "market says 1.6, we say 5.6". Omitted for adpless (no market to differ from).
     for p in players:
         if p.pop("_adpless", False):
             p["adp"] = float(p["ro"])
+        else:
+            p["os"] = round(p["score"], 1)
 
     # Position ranks + robust std-dev-gap positional tiers.
     for pos in ["QB", "RB", "WR", "TE", "K", "DST"]:
