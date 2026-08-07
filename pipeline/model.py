@@ -50,9 +50,15 @@ ADPLESS_DCO_MAX = {"QB": 3, "RB": 5, "WR": 6, "TE": 4}
 # mean + K*std of recent gaps; keep tiers between MIN and MAX size and cap the
 # tier count so the tail lands in a single "everyone else" tier.
 POS_TIER_K = 1.2
-POS_TIER_MIN = 3
+POS_TIER_MIN = 1
 POS_TIER_MAX_SIZE = 8
 POS_TIER_MAX_COUNT = 9
+# Second force-break for compressed positions (QB/TE): the std-dev gap rule never
+# fires when scores are smooth, so every break used to be the size cap and TE tier 1
+# spanned five rounds of ADP. Break a tier once its market-ADP span from the tier's
+# first player reaches this many picks. Measured on `adp`, not `score`, and OR'd
+# with the size cap; it overrides POS_TIER_MIN so a genuine cliff (TE1 alone) stands.
+POS_TIER_MAX_ADP_SPAN = 18.0
 OVERALL_TIER_K = 1.1
 OVERALL_TIER_MIN = 6
 OVERALL_TIER_MAX_SIZE = 60
@@ -62,17 +68,24 @@ OVERALL_TIER_MAX_COUNT = 15
 DRAFTABLE_N = 200
 
 
-def assign_tiers(scores, k, min_size, max_size, max_count):
+def assign_tiers(scores, k, min_size, max_size, max_count, adps=None, max_adp_span=None):
     """Given per-player scores in ascending (best-first) order, return a tier
     number per player. A new tier starts when the gap to the previous player is
     a strong outlier (gap > mean + k*std of the recent gaps), but only after the
     current tier has `min_size`; a tier is force-broken at `max_size`; and no
-    more than `max_count` tiers are created (the last absorbs the tail)."""
+    more than `max_count` tiers are created (the last absorbs the tail).
+
+    When `adps` and `max_adp_span` are given, a SECOND force-break fires once the
+    market-ADP span from the tier's first player reaches `max_adp_span`. It is
+    measured on ADP (not score), OR'd with the size cap, and overrides `min_size`
+    — so smooth/compressed positions (QB, TE) still get ADP-bounded tiers instead
+    of one giant max-size bucket."""
     n = len(scores)
     if n == 0:
         return []
     tiers = [1] * n
     tier, size, gaps = 1, 1, []
+    tier_start_adp = adps[0] if adps else None
     for i in range(1, n):
         gap = scores[i] - scores[i - 1]
         window = gaps[-12:]
@@ -81,10 +94,13 @@ def assign_tiers(scores, k, min_size, max_size, max_count):
             threshold = statistics.mean(window) + k * statistics.pstdev(window)
         strong = threshold is not None and gap > threshold and gap > 1e-9
         force = size >= max_size
+        span_break = (tier_start_adp is not None and max_adp_span is not None
+                      and adps[i] - tier_start_adp >= max_adp_span)
         allow = size >= min_size
-        if tier < max_count and (force or (allow and strong)):
+        if tier < max_count and (force or span_break or (allow and strong)):
             tier += 1
             size = 0
+            tier_start_adp = adps[i] if adps else None
         tiers[i] = tier
         size += 1
         gaps.append(gap)
@@ -309,7 +325,8 @@ def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, tea
     for pos in ["QB", "RB", "WR", "TE", "K", "DST"]:
         group = [p for p in players if p["p"] == pos]
         tiers = assign_tiers([p["score"] for p in group],
-                             POS_TIER_K, POS_TIER_MIN, POS_TIER_MAX_SIZE, POS_TIER_MAX_COUNT)
+                             POS_TIER_K, POS_TIER_MIN, POS_TIER_MAX_SIZE, POS_TIER_MAX_COUNT,
+                             adps=[p["adp"] for p in group], max_adp_span=POS_TIER_MAX_ADP_SPAN)
         for j, p in enumerate(group):
             p["pr"] = j + 1
             p["pt"] = tiers[j]
