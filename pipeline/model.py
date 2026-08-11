@@ -27,6 +27,19 @@ SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "v"}
 # Rank penalty (in overall-rank spots) by Sleeper injury status.
 INJURY_PENALTY = {"Questionable": 4, "Doubtful": 15, "Out": 30, "IR": 60, "PUP": 45, "Sus": 40, "COV": 10, "NA": 20}
 
+# NFL 2026 regular season kicks off Wed Sep 9 2026, 8:20pm ET — Seahawks host
+# Patriots in an unusual Wednesday opener (verified: en.wikipedia.org/wiki/2026_NFL_season).
+# BEFORE kickoff, preseason injury designations predict almost nothing — the market
+# has already priced them — so injury status still produces the note and the `st`
+# field but does NOT contribute to `score`. On/after kickoff, INJURY_PENALTY applies
+# exactly as before.
+SEASON_START = datetime(2026, 9, 9, 20, 20, tzinfo=timezone(timedelta(hours=-4)))
+
+
+def injuries_move_rank(now: datetime | None = None) -> bool:
+    """True once the season has kicked off — only then does injury status move `score`."""
+    return (now or datetime.now(timezone.utc)) >= SEASON_START
+
 # Full-pool union (v1.3 data-quality fix): after the ADP-anchored market pool,
 # append every fantasy-relevant Sleeper active so the board isn't limited to
 # who shows up in mock drafts. Skill players need a real depth-chart spot at or
@@ -37,9 +50,15 @@ ADPLESS_DCO_MAX = {"QB": 3, "RB": 5, "WR": 6, "TE": 4}
 # mean + K*std of recent gaps; keep tiers between MIN and MAX size and cap the
 # tier count so the tail lands in a single "everyone else" tier.
 POS_TIER_K = 1.2
-POS_TIER_MIN = 3
+POS_TIER_MIN = 1
 POS_TIER_MAX_SIZE = 8
 POS_TIER_MAX_COUNT = 9
+# Second force-break for compressed positions (QB/TE): the std-dev gap rule never
+# fires when scores are smooth, so every break used to be the size cap and TE tier 1
+# spanned five rounds of ADP. Break a tier once its market-ADP span from the tier's
+# first player reaches this many picks. Measured on `adp`, not `score`, and OR'd
+# with the size cap; it overrides POS_TIER_MIN so a genuine cliff (TE1 alone) stands.
+POS_TIER_MAX_ADP_SPAN = 18.0
 OVERALL_TIER_K = 1.1
 OVERALL_TIER_MIN = 6
 OVERALL_TIER_MAX_SIZE = 60
@@ -49,17 +68,24 @@ OVERALL_TIER_MAX_COUNT = 15
 DRAFTABLE_N = 200
 
 
-def assign_tiers(scores, k, min_size, max_size, max_count):
+def assign_tiers(scores, k, min_size, max_size, max_count, adps=None, max_adp_span=None):
     """Given per-player scores in ascending (best-first) order, return a tier
     number per player. A new tier starts when the gap to the previous player is
     a strong outlier (gap > mean + k*std of the recent gaps), but only after the
     current tier has `min_size`; a tier is force-broken at `max_size`; and no
-    more than `max_count` tiers are created (the last absorbs the tail)."""
+    more than `max_count` tiers are created (the last absorbs the tail).
+
+    When `adps` and `max_adp_span` are given, a SECOND force-break fires once the
+    market-ADP span from the tier's first player reaches `max_adp_span`. It is
+    measured on ADP (not score), OR'd with the size cap, and overrides `min_size`
+    — so smooth/compressed positions (QB, TE) still get ADP-bounded tiers instead
+    of one giant max-size bucket."""
     n = len(scores)
     if n == 0:
         return []
     tiers = [1] * n
     tier, size, gaps = 1, 1, []
+    tier_start_adp = adps[0] if adps else None
     for i in range(1, n):
         gap = scores[i] - scores[i - 1]
         window = gaps[-12:]
@@ -68,10 +94,13 @@ def assign_tiers(scores, k, min_size, max_size, max_count):
             threshold = statistics.mean(window) + k * statistics.pstdev(window)
         strong = threshold is not None and gap > threshold and gap > 1e-9
         force = size >= max_size
+        span_break = (tier_start_adp is not None and max_adp_span is not None
+                      and adps[i] - tier_start_adp >= max_adp_span)
         allow = size >= min_size
-        if tier < max_count and (force or (allow and strong)):
+        if tier < max_count and (force or span_break or (allow and strong)):
             tier += 1
             size = 0
+            tier_start_adp = adps[i] if adps else None
         tiers[i] = tier
         size += 1
         gaps.append(gap)
@@ -126,6 +155,7 @@ def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, tea
     sleeper_idx = build_sleeper_index(sleeper)
     trend_by_pid = {t["player_id"]: t["count"] for t in trending if isinstance(t, dict)}
     excluded = {norm(n) for n in overrides.get("exclude", [])}
+    injuries_live = injuries_move_rank()   # preseason: injuries annotate but don't move score
 
     def fmt_rank_map(entries):
         out = {}
@@ -166,7 +196,8 @@ def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, tea
         pen = 0
         status = sp.get("injury_status")
         if status:
-            pen = INJURY_PENALTY.get(status, 8)
+            if injuries_live:
+                pen = INJURY_PENALTY.get(status, 8)
             note = injury_note(sp)
         # 2) depth-chart reality check: priced like a starter but buried on depth chart
         dco = sp.get("depth_chart_order")
@@ -191,6 +222,7 @@ def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, tea
             "rs": std_ranks.get(key),
             "note": note,
             "st": status,          # raw Sleeper injury_status, machine-readable
+            "dc": dco,             # Sleeper depth_chart_order (null when unknown)
             "src": 1 + (1 if sp else 0) + (1 if key in half_ranks else 0) + (1 if key in std_ranks else 0),
             "sid": sp.get("_pid"),   # matched Sleeper player id (null when unmatched)
             "_pid": sp.get("_pid"),
@@ -208,7 +240,7 @@ def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, tea
 
     def reality(sp, pos):
         dco = sp.get("depth_chart_order") or 9
-        pen = INJURY_PENALTY.get(sp.get("injury_status"), 0) if sp.get("injury_status") else 0
+        pen = INJURY_PENALTY.get(sp.get("injury_status"), 0) if (injuries_live and sp.get("injury_status")) else 0
         trend = trend_by_pid.get(sp.get("_pid")) or 0
         return dco * 6 + pen - min(trend / 2000.0, 4.0)
 
@@ -221,6 +253,7 @@ def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, tea
             "rh": None, "rs": None,          # no market half/standard rank
             "note": note,
             "st": sp.get("injury_status"),   # raw Sleeper injury_status
+            "dc": sp.get("depth_chart_order"),  # Sleeper depth_chart_order (null when unknown)
             "src": 1,                        # Sleeper roster only — no market ADP
             "sid": sid,
             "_pid": pid,
@@ -285,16 +318,21 @@ def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, tea
 
     # ADP-less players get a sane late-draft sentinel = their overall rank, so
     # DraftGrade's (adp - rank) gap is zero (never a false steal/reach) and no
-    # market data is implied beyond their model rank.
+    # market data is implied beyond their model rank. Market players instead get
+    # `os` — our own ADP-scale number (the internal score) — so the app can show
+    # "market says 1.6, we say 5.6". Omitted for adpless (no market to differ from).
     for p in players:
         if p.pop("_adpless", False):
             p["adp"] = float(p["ro"])
+        else:
+            p["os"] = round(p["score"], 1)
 
     # Position ranks + robust std-dev-gap positional tiers.
     for pos in ["QB", "RB", "WR", "TE", "K", "DST"]:
         group = [p for p in players if p["p"] == pos]
         tiers = assign_tiers([p["score"] for p in group],
-                             POS_TIER_K, POS_TIER_MIN, POS_TIER_MAX_SIZE, POS_TIER_MAX_COUNT)
+                             POS_TIER_K, POS_TIER_MIN, POS_TIER_MAX_SIZE, POS_TIER_MAX_COUNT,
+                             adps=[p["adp"] for p in group], max_adp_span=POS_TIER_MAX_ADP_SPAN)
         for j, p in enumerate(group):
             p["pr"] = j + 1
             p["pt"] = tiers[j]

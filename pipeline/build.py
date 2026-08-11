@@ -182,6 +182,58 @@ def main():
               f"DST={pos_counts['DST']}, K={pos_counts['K']}, RB={pos_counts['RB']}, "
               f"WR={pos_counts['WR']}, QB={pos_counts['QB']}, TE={pos_counts['TE']}")
 
+    # Guard #10 — market-vs-model drift. Every player we publish far from where the
+    # market drafts them is a claim we must be able to defend. Compare each market
+    # player's published `ro` to their rank by RAW `adp`; report the top-150 movers
+    # (>8 spots) with a reason, and ABORT if a top-50 player moved >20 spots without
+    # a deliberate manual rank_nudge. This is the check that would have flagged the
+    # Gibbs/Kittle injury-penalty mis-ranks on Aug 3 without a human reading the feed.
+    trend_by_pid = {t["player_id"]: t["count"] for t in trending if isinstance(t, dict)}
+    nudges = overrides.get("rank_nudge", {})
+    injuries_live = model.injuries_move_rank()
+    market = [p for p in players if p.get("os") is not None]   # real-ADP pool only
+    by_adp = sorted(market, key=lambda p: p["adp"])
+    adp_rank = {p["id"]: i + 1 for i, p in enumerate(by_adp)}
+
+    def drift_reason(p):
+        reasons = []
+        if injuries_live and p.get("st"):
+            reasons.append(f"injury:{p['st']}")
+        if (p.get("dc") or 0) >= 3:
+            reasons.append(f"depth-chart:{p['dc']}")
+        if p["n"] in nudges:
+            reasons.append(f"nudge:{nudges[p['n']]:+g}")
+        tc = trend_by_pid.get(p.get("sid"))
+        if tc and tc > 5000:
+            reasons.append(f"trending:{tc}")
+        return ", ".join(reasons) or "other/unexplained"
+
+    movers, abort_hits = [], []
+    for p in market:
+        # "Top N" = top N by EITHER our published ro OR raw-ADP rank, so a player
+        # a penalty pushed OUT of the top 150 (Kittle: ADP ~122, published 218) is
+        # still seen — that pushed-down case is the whole point of the guard.
+        rank_scope = min(p["ro"], adp_rank[p["id"]])
+        if rank_scope > 150:
+            continue
+        drift = p["ro"] - adp_rank[p["id"]]
+        if abs(drift) > 8:
+            movers.append((rank_scope, drift, p))
+        if rank_scope <= 50 and abs(drift) > 20 and p["n"] not in nudges:
+            abort_hits.append((p, drift))
+    if movers:
+        print(f"  market-vs-model drift (top 150, moved >8 spots): {len(movers)}")
+        for ro, drift, p in sorted(movers, key=lambda m: m[0]):
+            print(f"    ro{ro:<4} {p['n']:24} adp={p['adp']:<6} adp_rank={adp_rank[p['id']]:<4} "
+                  f"drift={drift:+d}  [{drift_reason(p)}]")
+    else:
+        print("  market-vs-model drift: none in the top 150 moved >8 spots")
+    if abort_hits and not args.fixtures:
+        print("ABORT: top-50 player(s) moved >20 spots from raw ADP without a manual rank_nudge:")
+        for p, drift in abort_hits:
+            print(f"  - {p['n']} ro={p['ro']} adp={p['adp']} drift={drift:+d} [{drift_reason(p)}]")
+        sys.exit(1)
+
     db = {
         "meta": {
             "season": str(SEASON_YEAR),
