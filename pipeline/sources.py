@@ -17,7 +17,7 @@ SLEEPER_PLAYERS_URL = "https://api.sleeper.app/v1/players/nfl"
 SLEEPER_TRENDING_URL = "https://api.sleeper.app/v1/players/nfl/trending/add?lookback_hours=24&limit=100"
 FFC_ADP_URL = "https://fantasyfootballcalculator.com/api/v1/adp/{fmt}?teams={teams}&year={year}"
 
-FFC_FORMATS = {"ppr": "ppr", "half": "half-ppr", "standard": "standard"}
+FFC_FORMATS = {"ppr": "ppr", "half": "half-ppr", "standard": "standard", "superflex": "2qb"}
 
 
 def _get_json(url: str, timeout: int = 60):
