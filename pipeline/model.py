@@ -150,7 +150,7 @@ def injury_note(sp: dict) -> str | None:
     return txt
 
 
-def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, teams=12):
+def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, teams=12, adp_sfx=None):
     """Merge everything into ranked player dicts (app schema)."""
     sleeper_idx = build_sleeper_index(sleeper)
     trend_by_pid = {t["player_id"]: t["count"] for t in trending if isinstance(t, dict)}
@@ -167,8 +167,19 @@ def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, tea
             out.setdefault(key, i + 1)
         return out
 
+    def fmt_adp_map(entries):
+        """name|POS -> market ADP value (not a rank), first entry wins."""
+        out = {}
+        for e in entries or []:
+            pos = canon_pos(e.get("position", ""))
+            if pos not in {"QB", "RB", "WR", "TE", "K", "DST"}:
+                continue
+            out.setdefault(norm(e["name"]) + "|" + pos, round(float(e.get("adp", 0)), 1) or None)
+        return out
+
     half_ranks = fmt_rank_map(adp_half)
     std_ranks = fmt_rank_map(adp_std)
+    sfx_adp = fmt_adp_map(adp_sfx)   # real superflex (2QB) market ADP by name|POS
 
     players = []
     seen = set()
@@ -220,6 +231,7 @@ def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, tea
             "score": score + pen,
             "rh": half_ranks.get(key),
             "rs": std_ranks.get(key),
+            "sfa": sfx_adp.get(key),   # real superflex (2QB) market ADP; null when unmatched
             "note": note,
             "st": status,          # raw Sleeper injury_status, machine-readable
             "dc": dco,             # Sleeper depth_chart_order (null when unknown)
@@ -251,6 +263,7 @@ def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, tea
             "adp": None,                     # sentinel filled after ranking
             "score": score,
             "rh": None, "rs": None,          # no market half/standard rank
+            "sfa": sfx_adp.get(norm(name) + "|" + pos),   # real superflex ADP if this player has one
             "note": note,
             "st": sp.get("injury_status"),   # raw Sleeper injury_status
             "dc": sp.get("depth_chart_order"),  # Sleeper depth_chart_order (null when unknown)
