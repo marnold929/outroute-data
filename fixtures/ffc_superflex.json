@@ -1,0 +1,17 @@
+{
+  "status": "Success",
+  "meta": {"type": "2 QB", "teams": 12, "rounds": 15, "total_drafts": 100, "start_date": "2026-07-13", "end_date": "2026-08-12"},
+  "players": [
+    {"player_id": 8, "name": "Josh Allen", "position": "QB", "team": "BUF", "adp": 2.0},
+    {"player_id": 1, "name": "Jahmyr Gibbs", "position": "RB", "team": "DET", "adp": 2.5},
+    {"player_id": 2, "name": "Bijan Robinson", "position": "RB", "team": "ATL", "adp": 3.5},
+    {"player_id": 3, "name": "Ja'Marr Chase", "position": "WR", "team": "CIN", "adp": 6.0},
+    {"player_id": 4, "name": "Puka Nacua", "position": "WR", "team": "LAR", "adp": 7.5},
+    {"player_id": 5, "name": "Christian McCaffrey", "position": "RB", "team": "SF", "adp": 11.0},
+    {"player_id": 6, "name": "Justin Jefferson", "position": "WR", "team": "MIN", "adp": 13.0},
+    {"player_id": 7, "name": "CeeDee Lamb", "position": "WR", "team": "DAL", "adp": 16.0},
+    {"player_id": 9, "name": "Brock Bowers", "position": "TE", "team": "LV", "adp": 33.0},
+    {"player_id": 11, "name": "Davante Adams", "position": "WR", "team": "LAR", "adp": 62.0},
+    {"player_id": 10, "name": "Jordan Mason", "position": "RB", "team": "MIN", "adp": 110.0}
+  ]
+}

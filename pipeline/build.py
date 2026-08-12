@@ -48,11 +48,14 @@ def main():
     adp_ppr = sources.fetch_adp("ppr", SEASON_YEAR, fixtures=args.fixtures)
     adp_half = sources.fetch_adp("half", SEASON_YEAR, fixtures=args.fixtures)
     adp_std = sources.fetch_adp("standard", SEASON_YEAR, fixtures=args.fixtures)
+    # Real superflex market ADP (FFC's 2qb format) — QBs are worth 20+ picks more
+    # here than in 1-QB. Additive: published as the optional `sfa` field.
+    adp_sfx = sources.fetch_adp("superflex", SEASON_YEAR, fixtures=args.fixtures)
     byes = sources.load_byes()
     overrides = sources.load_overrides()
     schedule = sources.fetch_schedule(SEASON_YEAR, fixtures=args.fixtures)
     print(f"  sleeper={len(sleeper)} adp_ppr={len(adp_ppr)} half={len(adp_half)} "
-          f"std={len(adp_std)} trending={len(trending)} schedule_weeks={len(schedule)}")
+          f"std={len(adp_std)} sfx={len(adp_sfx)} trending={len(trending)} schedule_weeks={len(schedule)}")
 
     # Source-coverage guards (mirror MIN_PLAYERS): a degraded upstream must
     # abort and keep the previous published file, never ship silently gutted data.
@@ -79,7 +82,7 @@ def main():
         weeks_stats = sources.fetch_season_stats(stats_season, fixtures=args.fixtures)
     print(f"  usage stats: season={stats_season} weeks_with_games={len(weeks_stats)}")
 
-    players, adp_stat = model.assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides)
+    players, adp_stat = model.assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, adp_sfx=adp_sfx)
 
     # Draftable-range ADP ratio guard — the layer that actually matters. Even
     # when adp_ppr passes the source-count check above, a degraded PPR feed can
