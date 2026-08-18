@@ -118,6 +118,23 @@ def canon_pos(pos: str) -> str:
     return POS_MAP.get(pos, pos)
 
 
+def spread_of(entry: dict) -> tuple:
+    """The four optional FFC dispersion fields from a raw ADP entry, as
+    (sd, hi, lo, td): standard deviation (1 dp), highest/earliest pick,
+    lowest/latest pick, and times drafted. Any field the API omits stays None
+    (older app builds ignore keys they don't know / decode null as absent)."""
+    sd = entry.get("stdev")
+    hi = entry.get("high")
+    lo = entry.get("low")
+    td = entry.get("times_drafted")
+    return (
+        round(float(sd), 1) if sd is not None else None,
+        int(hi) if hi is not None else None,
+        int(lo) if lo is not None else None,
+        int(td) if td is not None else None,
+    )
+
+
 def build_sleeper_index(sleeper: dict) -> dict:
     """normalized 'name|POS' -> sleeper player dict (active players only)."""
     idx = {}
@@ -177,9 +194,21 @@ def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, tea
             out.setdefault(norm(e["name"]) + "|" + pos, round(float(e.get("adp", 0)), 1) or None)
         return out
 
+    def fmt_spread_map(entries):
+        """name|POS -> (sd, hi, lo, td) from an FFC ADP list; first entry wins.
+        Keyed exactly like fmt_adp_map so the spread lines up with the joined ADP."""
+        out = {}
+        for e in entries or []:
+            pos = canon_pos(e.get("position", ""))
+            if pos not in {"QB", "RB", "WR", "TE", "K", "DST"}:
+                continue
+            out.setdefault(norm(e["name"]) + "|" + pos, spread_of(e))
+        return out
+
     half_ranks = fmt_rank_map(adp_half)
     std_ranks = fmt_rank_map(adp_std)
     sfx_adp = fmt_adp_map(adp_sfx)   # real superflex (2QB) market ADP by name|POS
+    sfx_spread = fmt_spread_map(adp_sfx)   # 2QB dispersion (sfsd/sfhi/sflo/sftd) by name|POS
 
     players = []
     seen = set()
@@ -224,14 +253,18 @@ def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, tea
         if onote:
             note = onote if not note else f"{onote} | {note}"
 
+        sd, hi, lo, td = spread_of(e)   # FFC PPR draft-position spread (market pool)
+        sfsd, sfhi, sflo, sftd = sfx_spread.get(key, (None, None, None, None))
         players.append({
             "n": name, "p": pos, "t": team,
             "bye": byes.get(team),
             "adp": round(float(e.get("adp", 0)), 1) or None,
+            "sd": sd, "hi": hi, "lo": lo, "td": td,   # FFC PPR ADP spread (market pool only)
             "score": score + pen,
             "rh": half_ranks.get(key),
             "rs": std_ranks.get(key),
             "sfa": sfx_adp.get(key),   # real superflex (2QB) market ADP; null when unmatched
+            "sfsd": sfsd, "sfhi": sfhi, "sflo": sflo, "sftd": sftd,  # FFC 2QB ADP spread; null when unmatched
             "note": note,
             "st": status,          # raw Sleeper injury_status, machine-readable
             "dc": dco,             # Sleeper depth_chart_order (null when unknown)
@@ -257,13 +290,18 @@ def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, tea
         return dco * 6 + pen - min(trend / 2000.0, 4.0)
 
     def add_adpless(name, pos, team, sp, score, note=None, sid=None, pid=None):
+        # No PPR market -> no PPR spread (sd/hi/lo/td omitted). The 2QB spread
+        # follows `sfa`: present exactly when this player is in FFC's 2QB pool.
+        sfk = norm(name) + "|" + pos
+        sfsd, sfhi, sflo, sftd = sfx_spread.get(sfk, (None, None, None, None))
         players.append({
             "n": name, "p": pos, "t": team,
             "bye": byes.get(team),
             "adp": None,                     # sentinel filled after ranking
             "score": score,
             "rh": None, "rs": None,          # no market half/standard rank
-            "sfa": sfx_adp.get(norm(name) + "|" + pos),   # real superflex ADP if this player has one
+            "sfa": sfx_adp.get(sfk),   # real superflex ADP if this player has one
+            "sfsd": sfsd, "sfhi": sfhi, "sflo": sflo, "sftd": sftd,  # 2QB spread if in the 2QB pool
             "note": note,
             "st": sp.get("injury_status"),   # raw Sleeper injury_status
             "dc": sp.get("depth_chart_order"),  # Sleeper depth_chart_order (null when unknown)
