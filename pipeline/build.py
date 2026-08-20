@@ -8,6 +8,7 @@ import argparse
 import datetime
 import json
 import pathlib
+import subprocess
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -154,6 +155,53 @@ def main():
             for t, s in over:
                 print(f"  - {t}: {s:.0f}%")
             sys.exit(1)
+
+    # Movers: windowed ADP deltas (d7/d14) from the repo's OWN build history —
+    # resolve players.json as of the nearest commit at/before 7 and 14 days ago.
+    # Fixtures skip history entirely (no git dependency). NEVER aborts: any git or
+    # parse failure WARNs and publishes without the fields (a missing mover field
+    # must never keep the previous file). CI needs full history (fetch-depth: 0).
+    if not args.fixtures:
+        now = datetime.datetime.now(datetime.timezone.utc)
+
+        def players_as_of(days):
+            cutoff = (now - datetime.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
+            sha = subprocess.run(
+                ["git", "-C", str(ROOT), "rev-list", "-1", f"--before={cutoff}", "HEAD"],
+                capture_output=True, text=True).stdout.strip()
+            if not sha:
+                raise RuntimeError(f"no commit at/before {cutoff} "
+                                   "(shallow checkout? the workflow needs fetch-depth: 0)")
+            blob = subprocess.run(
+                ["git", "-C", str(ROOT), "show", f"{sha}:docs/players.json"],
+                capture_output=True, text=True)
+            if blob.returncode != 0:
+                raise RuntimeError(f"git show {sha[:7]}:docs/players.json failed")
+            return sha, json.loads(blob.stdout)
+
+        old7 = old14 = None
+        s7 = s14 = None
+        try:
+            s7, old7 = players_as_of(7)
+        except Exception as exc:
+            print(f"  WARN: 7d history unavailable ({type(exc).__name__}: {exc}); d7 omitted")
+        try:
+            s14, old14 = players_as_of(14)
+        except Exception as exc:
+            print(f"  WARN: 14d history unavailable ({type(exc).__name__}: {exc}); d14 omitted")
+        if old7 is not None or old14 is not None:
+            n7, n14 = model.attach_movers(players, old7, old14)
+            print(f"  movers: d7 on {n7}, d14 on {n14} players "
+                  f"(7d ago {s7[:7] if s7 else '-'}, 14d ago {s14[:7] if s14 else '-'})")
+            top = sorted((p for p in players if p.get("d14") is not None),
+                         key=lambda p: -abs(p["d14"]))[:10]
+            if top:
+                print("  top-10 |d14| movers (adp: 14d ago -> now):")
+                for p in top:
+                    na = model.market_adp(p)
+                    print(f"    {p['n']:24} {p['p']:3} {na + p['d14']:6.1f} -> {na:6.1f}"
+                          f"  d14={p['d14']:+.1f}"
+                          + (f"  d7={p['d7']:+.1f}" if p.get("d7") is not None else ""))
 
     # Optional AI one-liners — no-op unless ANTHROPIC_API_KEY is set.
     blurbs.attach_blurbs(players)
