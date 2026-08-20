@@ -111,8 +111,26 @@ def main():
             sys.exit(1)
 
     filled = model.attach_usage(players, weeks_stats, stats_season,
-                                current_season=(stats_season == SEASON_YEAR))
+                                current_season=(stats_season == SEASON_YEAR),
+                                sleeper_players=sleeper)
     print(f"  usage populated for {filled}/{len(players)} players")
+
+    # Volume-stat spot checks. WARN-only for the first real-run review — the
+    # morning pass tightens the share-sum check to an ABORT once eyeballed.
+    if weeks_stats:
+        def _top(pos, key, k):
+            pool = [p for p in players if p["p"] == pos and p.get(key) is not None]
+            return sorted(pool, key=lambda x: -x[key])[:k]
+        print("  target-share top WR:", ", ".join(
+            f"{p['n']} {p['uts']}%" for p in _top("WR", "uts", 12)) or "(none)")
+        print("  pass-att/gm top QB:", ", ".join(
+            f"{p['n']} {p['upa']}" for p in _top("QB", "upa", 5)) or "(none)")
+        print("  rush-att/gm top RB:", ", ".join(
+            f"{p['n']} {p['uc']}" for p in _top("RB", "uc", 5)) or "(none)")
+        weird = [p for p in players if (p.get("uts") or 0) > 45]
+        if weird:
+            print(f"  WARN: {len(weird)} players above 45% target share: "
+                  + ", ".join(p["n"] for p in weird[:5]))
 
     # Optional AI one-liners — no-op unless ANTHROPIC_API_KEY is set.
     blurbs.attach_blurbs(players)

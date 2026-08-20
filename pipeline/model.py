@@ -405,19 +405,48 @@ def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, tea
     return players, stats
 
 
-def attach_usage(players, weeks_stats, season, current_season):
+def attach_usage(players, weeks_stats, season, current_season, sleeper_players=None):
     """Additive post-pass: per-game usage over each player's LAST 3 PLAYED games.
 
     Adds to every player dict (null when no data, e.g. rookies):
       ut = targets/gm, uc = carries/gm, up = PPR points/gm (all 1 decimal)
       us = source label ("2025", or "2026 wk3-5" when from the running season)
+    Volume/efficiency extras (same window, null when not applicable):
+      uts = share of TEAM targets, percent, averaged per played week (RB/WR/TE).
+            Team attribution is the player's CURRENT team, so a mid-season
+            trade misattributes his old weeks — accepted, documented caveat.
+      ur  = receptions/gm, uy = receiving yards/gm          (RB/WR/TE)
+      uyc = rushing yards per carry, window total >= 10 att (RB/QB)
+      upa = pass att/gm, ucp = completion %, uya = yards/att
+            (QB only, window total >= 10 att)
     Does not touch ranks/tiers — purely descriptive fields.
     """
     order = sorted(weeks_stats.keys(), reverse=True)
+
+    # Weekly team-target totals over the FULL Sleeper stats map (not just our
+    # pool), attributed by each pid's current team — the denominator for uts.
+    pid_team = {}
+    if sleeper_players:
+        for pid, sp in sleeper_players.items():
+            if isinstance(sp, dict) and sp.get("team"):
+                pid_team[pid] = sp["team"]
+    team_tgts = {}   # week -> {team: total rec_tgt}
+    for w in order:
+        totals = {}
+        for pid, st in weeks_stats[w].items():
+            team = pid_team.get(pid)
+            if team and isinstance(st, dict):
+                t = st.get("rec_tgt") or 0
+                if t:
+                    totals[team] = totals.get(team, 0) + t
+        team_tgts[w] = totals
+
     filled = 0
     for p in players:
         pid = p.pop("_pid", None)
         p["ut"] = p["uc"] = p["up"] = p["us"] = None
+        p["uts"] = p["ur"] = p["uy"] = p["uyc"] = None
+        p["upa"] = p["ucp"] = p["uya"] = None
         if not pid:
             continue
         games = []
@@ -430,11 +459,41 @@ def attach_usage(players, weeks_stats, season, current_season):
         if not games:
             continue
         n = len(games)
-        p["ut"] = round(sum((s.get("rec_tgt") or 0) for _, s in games) / n, 1)
-        p["uc"] = round(sum((s.get("rush_att") or 0) for _, s in games) / n, 1)
-        p["up"] = round(sum((s.get("pts_ppr") or 0) for _, s in games) / n, 1)
+
+        def avg(key):
+            return sum((s.get(key) or 0) for _, s in games) / n
+
+        p["ut"] = round(avg("rec_tgt"), 1)
+        p["uc"] = round(avg("rush_att"), 1)
+        p["up"] = round(avg("pts_ppr"), 1)
         wks = sorted(w for w, _ in games)
         p["us"] = f"{season} wk{wks[0]}-{wks[-1]}" if current_season else str(season)
+
+        pos = p.get("p")
+        if pos in ("RB", "WR", "TE"):
+            p["ur"] = round(avg("rec"), 1)
+            p["uy"] = round(avg("rec_yd"), 1)
+            shares = []
+            for w, st in games:
+                tot = team_tgts.get(w, {}).get(p.get("t")) or 0
+                tgt = st.get("rec_tgt") or 0
+                if tot > 0 and tot >= tgt:
+                    shares.append(100.0 * tgt / tot)
+            if shares:
+                p["uts"] = round(sum(shares) / len(shares), 1)
+        if pos in ("RB", "QB"):
+            att = sum((s.get("rush_att") or 0) for _, s in games)
+            yds = sum((s.get("rush_yd") or 0) for _, s in games)
+            if att >= 10:
+                p["uyc"] = round(yds / att, 1)
+        if pos == "QB":
+            pa = sum((s.get("pass_att") or 0) for _, s in games)
+            pc = sum((s.get("pass_cmp") or 0) for _, s in games)
+            py = sum((s.get("pass_yd") or 0) for _, s in games)
+            if pa >= 10:
+                p["upa"] = round(pa / n, 1)
+                p["ucp"] = round(100.0 * pc / pa, 1)
+                p["uya"] = round(py / pa, 1)
         filled += 1
     return filled
 
