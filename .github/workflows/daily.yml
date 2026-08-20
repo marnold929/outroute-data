@@ -23,6 +23,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so build.py can read players.json as of 7/14 days ago (movers)
 
       - uses: actions/setup-python@v5
         with:

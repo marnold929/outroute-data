@@ -509,6 +509,51 @@ def attach_usage(players, weeks_stats, season, current_season, sleeper_players=N
     return filled
 
 
+def market_adp(p):
+    """A player dict's REAL market ADP, or None when it's the ADP-less sentinel
+    (adp == overall rank) or absent. Version-robust: keys off adp!=ro, so it works
+    on old feeds from before the `os` market marker existed."""
+    adp, ro = p.get("adp"), p.get("ro")
+    if adp is None or ro is None:
+        return None
+    return adp if adp != float(ro) else None
+
+
+def attach_movers(players, old7, old14):
+    """Additive post-pass: windowed ADP deltas from the repo's own build history.
+      d7  = adp_then(7d)  - adp_now   (positive = the player moved UP the board)
+      d14 = adp_then(14d) - adp_now
+    Market pool only — set only when the player has a real market ADP now AND in
+    that old file, matched by the pipeline's name|position norm. `old7`/`old14` are
+    the parsed players.json docs from ~7/~14 days ago, or None when that window is
+    unavailable (its field is then simply omitted). Keys are OMITTED, never null,
+    when a delta can't be formed. Returns (n7, n14) populated, for logging."""
+    def index(doc):
+        idx = {}
+        for op in (doc or {}).get("players", []):
+            a = market_adp(op)
+            if a is not None and op.get("n") and op.get("p"):
+                idx[norm(op["n"]) + "|" + op["p"]] = a
+        return idx
+
+    i7, i14 = index(old7), index(old14)
+    n7 = n14 = 0
+    for p in players:
+        now_adp = market_adp(p)
+        if now_adp is None:
+            continue
+        key = norm(p["n"]) + "|" + p["p"]
+        then7 = i7.get(key)
+        if then7 is not None:
+            p["d7"] = round(then7 - now_adp, 1)
+            n7 += 1
+        then14 = i14.get(key)
+        if then14 is not None:
+            p["d14"] = round(then14 - now_adp, 1)
+            n14 += 1
+    return n7, n14
+
+
 # ESPN news team categories carry full team names; map our abbreviations to them.
 TEAM_NAMES = {
     "ARI": "Arizona Cardinals", "ATL": "Atlanta Falcons", "BAL": "Baltimore Ravens",
