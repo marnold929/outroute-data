@@ -405,19 +405,62 @@ def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, tea
     return players, stats
 
 
-def attach_usage(players, weeks_stats, season, current_season):
+def attach_usage(players, weeks_stats, season, current_season, sleeper_players=None):
     """Additive post-pass: per-game usage over each player's LAST 3 PLAYED games.
 
     Adds to every player dict (null when no data, e.g. rookies):
       ut = targets/gm, uc = carries/gm, up = PPR points/gm (all 1 decimal)
       us = source label ("2025", or "2026 wk3-5" when from the running season)
-    Does not touch ranks/tiers — purely descriptive fields.
+    Volume/efficiency extras (last-3 window unless noted, null when N/A):
+      uts = share of TEAM targets, percent (RB/WR/TE). SEASON-long, not last-3:
+            his season targets over his CURRENT team's season target total, so a
+            team's shares sum to ~100% and stay comparable (a per-player recent
+            window double-counts an injured WR1 and his replacements). Team
+            attribution is the CURRENT team, so a mid-season trade counts his old
+            weeks against his new team — accepted, documented caveat.
+      ur  = receptions/gm, uy = receiving yards/gm          (RB/WR/TE)
+      uyc = rushing yards per carry, window total >= 10 att (RB/QB)
+      upa = pass att/gm, ucp = completion %, uya = yards/att
+            (QB only, window total >= 10 att)
+    Season/window logic matches ut/uc/up (stats_season, current-season flip), so
+    everything updates weekly the moment the running season has games; uts widens
+    to the full season by design. Does not touch ranks/tiers — descriptive only.
     """
     order = sorted(weeks_stats.keys(), reverse=True)
+
+    # Season-long target totals over the FULL Sleeper stats map (not just our
+    # pool), attributed by each pid's CURRENT team — the numerator and denominator
+    # for uts. Target share MUST use a team-common window (the whole stats season),
+    # NOT each player's own last-3-played weeks: with per-player windows an injured
+    # WR1 (his strong early weeks) and the replacements who absorbed his targets
+    # (their later weeks) both read as WR1s, so a team's shares can sum to ~200%.
+    # Season totals make every current-roster player's share sum to ~100% by
+    # construction and give stable, comparable numbers (WR1 ~25-32%).
+    pid_team = {}
+    if sleeper_players:
+        for pid, sp in sleeper_players.items():
+            if isinstance(sp, dict) and sp.get("team"):
+                pid_team[pid] = sp["team"]
+    pl_season_tgt = {}     # pid  -> season total rec_tgt
+    team_season_tgt = {}   # team -> season total rec_tgt (current roster)
+    for w in order:
+        for pid, st in weeks_stats[w].items():
+            if not isinstance(st, dict):
+                continue
+            t = st.get("rec_tgt") or 0
+            if not t:
+                continue
+            pl_season_tgt[pid] = pl_season_tgt.get(pid, 0) + t
+            team = pid_team.get(pid)
+            if team:
+                team_season_tgt[team] = team_season_tgt.get(team, 0) + t
+
     filled = 0
     for p in players:
         pid = p.pop("_pid", None)
         p["ut"] = p["uc"] = p["up"] = p["us"] = None
+        p["uts"] = p["ur"] = p["uy"] = p["uyc"] = None
+        p["upa"] = p["ucp"] = p["uya"] = None
         if not pid:
             continue
         games = []
@@ -430,11 +473,38 @@ def attach_usage(players, weeks_stats, season, current_season):
         if not games:
             continue
         n = len(games)
-        p["ut"] = round(sum((s.get("rec_tgt") or 0) for _, s in games) / n, 1)
-        p["uc"] = round(sum((s.get("rush_att") or 0) for _, s in games) / n, 1)
-        p["up"] = round(sum((s.get("pts_ppr") or 0) for _, s in games) / n, 1)
+
+        def avg(key):
+            return sum((s.get(key) or 0) for _, s in games) / n
+
+        p["ut"] = round(avg("rec_tgt"), 1)
+        p["uc"] = round(avg("rush_att"), 1)
+        p["up"] = round(avg("pts_ppr"), 1)
         wks = sorted(w for w, _ in games)
         p["us"] = f"{season} wk{wks[0]}-{wks[-1]}" if current_season else str(season)
+
+        pos = p.get("p")
+        if pos in ("RB", "WR", "TE"):
+            p["ur"] = round(avg("rec"), 1)
+            p["uy"] = round(avg("rec_yd"), 1)
+            # Season-long target share (see the precompute note above): his season
+            # targets over his CURRENT team's season target total.
+            team_tot = team_season_tgt.get(p.get("t"), 0)
+            if team_tot > 0:
+                p["uts"] = round(100.0 * pl_season_tgt.get(pid, 0) / team_tot, 1)
+        if pos in ("RB", "QB"):
+            att = sum((s.get("rush_att") or 0) for _, s in games)
+            yds = sum((s.get("rush_yd") or 0) for _, s in games)
+            if att >= 10:
+                p["uyc"] = round(yds / att, 1)
+        if pos == "QB":
+            pa = sum((s.get("pass_att") or 0) for _, s in games)
+            pc = sum((s.get("pass_cmp") or 0) for _, s in games)
+            py = sum((s.get("pass_yd") or 0) for _, s in games)
+            if pa >= 10:
+                p["upa"] = round(pa / n, 1)
+                p["ucp"] = round(100.0 * pc / pa, 1)
+                p["uya"] = round(py / pa, 1)
         filled += 1
     return filled
 

@@ -111,8 +111,49 @@ def main():
             sys.exit(1)
 
     filled = model.attach_usage(players, weeks_stats, stats_season,
-                                current_season=(stats_season == SEASON_YEAR))
+                                current_season=(stats_season == SEASON_YEAR),
+                                sleeper_players=sleeper)
     print(f"  usage populated for {filled}/{len(players)} players")
+
+    # Volume-stat spot checks. WARN-only for the first real-run review — the
+    # morning pass tightens the share-sum check to an ABORT once eyeballed.
+    if weeks_stats:
+        def _top(pos, key, k):
+            pool = [p for p in players if p["p"] == pos and p.get(key) is not None]
+            return sorted(pool, key=lambda x: -x[key])[:k]
+        print("  target-share top WR:", ", ".join(
+            f"{p['n']} {p['uts']}%" for p in _top("WR", "uts", 12)) or "(none)")
+        print("  pass-att/gm top QB:", ", ".join(
+            f"{p['n']} {p['upa']}" for p in _top("QB", "upa", 5)) or "(none)")
+        print("  rush-att/gm top RB:", ", ".join(
+            f"{p['n']} {p['uc']}" for p in _top("RB", "uc", 5)) or "(none)")
+        weird = [p for p in players if (p.get("uts") or 0) > 45]
+        if weird:
+            print(f"  WARN: {len(weird)} players above 45% target share: "
+                  + ", ".join(p["n"] for p in weird[:5]))
+
+        # Team target-share sums: with clean data a team's published shares add up
+        # to ~100% (our pool covers nearly every target-getter). Report the outliers
+        # (>5pts off 100), and ABORT past 130% — a sum that high only comes from a
+        # denominator/window bug (e.g. a player's per-week share computed against the
+        # wrong team total), never from real usage. Skipped on fixtures (too small
+        # to sum meaningfully), like the other data-quality guards.
+        team_share = {}
+        for p in players:
+            if p.get("uts") is not None and p.get("t"):
+                team_share[p["t"]] = team_share.get(p["t"], 0.0) + p["uts"]
+        outliers = sorted((t for t, s in team_share.items() if abs(s - 100) > 5),
+                          key=lambda t: -team_share[t])
+        if outliers:
+            print("  target-share sum outliers (off 100±5): "
+                  + ", ".join(f"{t} {team_share[t]:.0f}%" for t in outliers[:10]))
+        over = sorted(((t, s) for t, s in team_share.items() if s > 130),
+                      key=lambda kv: -kv[1])
+        if over and not args.fixtures:
+            print("ABORT: team target-share sum exceeds 130% — denominator/window bug:")
+            for t, s in over:
+                print(f"  - {t}: {s:.0f}%")
+            sys.exit(1)
 
     # Optional AI one-liners — no-op unless ANTHROPIC_API_KEY is set.
     blurbs.attach_blurbs(players)
