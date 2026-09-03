@@ -40,6 +40,18 @@ def injuries_move_rank(now: datetime | None = None) -> bool:
     """True once the season has kicked off — only then does injury status move `score`."""
     return (now or datetime.now(timezone.utc)) >= SEASON_START
 
+
+def effective_injury_penalty(pen: float, nudge: float) -> float:
+    """Injury penalty to apply for a player who also carries a manual rank_nudge.
+
+    A downward nudge already IS the price of the player's availability (it was
+    written with the injury/suspension in view), so the injury penalty must not
+    stack on top of it: the player takes the LARGER of the two, not the sum.
+    Josh Jacobs: nudge -46 + NA (20) -> 46, not 66. Upward nudges (boosts) are
+    not an availability price and leave the penalty untouched.
+    """
+    return max(0.0, float(pen) - max(0.0, -float(nudge)))
+
 # Full-pool union (v1.3 data-quality fix): after the ADP-anchored market pool,
 # append every fantasy-relevant Sleeper active so the board isn't limited to
 # who shows up in mock drafts. Skill players need a real depth-chart spot at or
@@ -235,9 +247,11 @@ def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, tea
         note = None
         pen = 0
         status = sp.get("injury_status")
+        nudge = float(overrides.get("rank_nudge", {}).get(name, overrides.get("rank_nudge", {}).get(e["name"], 0)))
         if status:
             if injuries_live:
-                pen = INJURY_PENALTY.get(status, 8)
+                # A manual nudge already prices availability — don't stack.
+                pen = effective_injury_penalty(INJURY_PENALTY.get(status, 8), nudge)
             note = injury_note(sp)
         # 2) depth-chart reality check: priced like a starter but buried on depth chart
         dco = sp.get("depth_chart_order")
@@ -248,7 +262,7 @@ def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, tea
         if tcount and tcount > 5000:
             pen -= 3
         # 4) manual layer
-        pen -= float(overrides.get("rank_nudge", {}).get(name, overrides.get("rank_nudge", {}).get(e["name"], 0)))
+        pen -= nudge
         onote = overrides.get("news", {}).get(name) or overrides.get("news", {}).get(e["name"])
         if onote:
             note = onote if not note else f"{onote} | {note}"
