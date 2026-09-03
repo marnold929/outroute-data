@@ -9,6 +9,9 @@ on:
     # and runs queued at the most contended minute get delayed or dropped
     # outright. A dropped run means a stale feed nobody is told about.
     - cron: "17 */4 * * *"
+    # Second line offset by two hours: GitHub drops 2-3 of the 6 daily firings
+    # above, so a dropped run is covered within 2h instead of leaving a 8h+ gap.
+    - cron: "17 2-22/4 * * *"
   workflow_dispatch: {}   # lets you run it manually from the Actions tab
   push:
     paths:
