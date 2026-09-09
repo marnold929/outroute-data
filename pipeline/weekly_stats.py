@@ -4,6 +4,17 @@ STANDALONE — nothing here is wired into build.py yet, so the daily cron is
 unaffected. The point of this module is to be validated against a COMPLETE
 season (2025) so that pointing it at 2026 is a one-argument change.
 
+Populating the cache is part of this module so a clean checkout can reproduce
+the numbers with no extra script:
+
+    python3 -m pipeline.weekly_stats --season 2025 --cache "$SD" --fetch
+
+That writes stats_<season>_wk<N>.json per played week plus players.json into
+the cache dir, then prints a summary. The cache must live OUTSIDE the repo —
+roughly 11 MB of stats plus Sleeper's ~16 MB player map per season, none of
+which belongs in fixtures/ or docs/ — and _check_cache_dir() refuses any path
+inside the working tree rather than trusting .gitignore to catch it.
+
 Four things about Sleeper's payload that the code below depends on, each
 verified against the real 2025 endpoint rather than assumed:
 
@@ -29,8 +40,12 @@ verified against the real 2025 endpoint rather than assumed:
 
 from __future__ import annotations
 
+import argparse
 import json
+import os
 from pathlib import Path
+
+from . import sources
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -48,7 +63,7 @@ def _points(line: dict, key: str) -> float:
 
 
 def load_cached_weeks(season: int, cache_dir: Path) -> dict[int, dict]:
-    """{week -> raw payload} from a scratch cache written by fetch_weeks()."""
+    """{week -> raw payload} from a scratch cache written by fetch_weeks() (--fetch)."""
     weeks = {}
     for wk in range(1, 19):
         path = cache_dir / f"stats_{season}_wk{wk}.json"
@@ -130,3 +145,116 @@ def boom_bust_rates(rec: dict, boom_bar: float, bust_bar: float) -> tuple[float,
     boom = sum(1 for s in rec["weekly_ppr"] if s >= boom_bar)
     bust = sum(1 for s in rec["weekly_ppr"] if s <= bust_bar)
     return round(100.0 * boom / g, 1), round(100.0 * bust / g, 1)
+
+
+def _check_cache_dir(cache_dir: Path) -> Path:
+    """Resolve the cache dir, refusing anywhere inside the repo.
+
+    The cache is ~27 MB of third-party payloads per season and is worthless as
+    source control. Rather than trusting .gitignore (which covers only
+    __pycache__), anything under the working tree is rejected outright — that
+    catches fixtures/ and docs/ along with every other in-repo path.
+    """
+    if not str(cache_dir):
+        raise SystemExit("no cache dir: pass --cache or set SD")
+    resolved = Path(cache_dir).expanduser().resolve()
+    if resolved == ROOT or ROOT in resolved.parents:
+        raise SystemExit(
+            f"refusing to use a cache dir inside the repo ({resolved}).\n"
+            f"Use a scratch dir outside {ROOT} — e.g. SD=$(mktemp -d).")
+    return resolved
+
+
+def fetch_weeks(season: int, cache_dir: Path, force: bool = False) -> dict[int, dict]:
+    """Populate the scratch cache from Sleeper and return {week -> payload}.
+
+    Reuses sources.fetch_season_stats, which already drops unplayed weeks and
+    soft-fails a single week rather than the season. That call fetches the whole
+    season in one go, so the cache is all-or-nothing per season: a complete
+    cache is left alone unless `force`, and an in-season 2026 top-up means
+    re-running with --fetch --force.
+    """
+    cache_dir = _check_cache_dir(cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    players_path = cache_dir / "players.json"
+
+    cached = load_cached_weeks(season, cache_dir)
+    if cached and players_path.exists() and not force:
+        print(f"  cache already holds {len(cached)} weeks of {season}; "
+              f"--force to refetch")
+        return cached
+
+    print(f"  fetching {season} weekly stats from Sleeper ...")
+    weeks = sources.fetch_season_stats(season)
+    if not weeks:
+        raise SystemExit(f"no played weeks returned for {season}")
+    for wk, payload in sorted(weeks.items()):
+        path = cache_dir / f"stats_{season}_wk{wk}.json"
+        path.write_text(json.dumps(payload))
+        print(f"    week {wk:>2}: {len(payload):>5} rows  ->  {path.name}")
+
+    if force or not players_path.exists():
+        print("  fetching Sleeper player map ...")
+        players_path.write_text(json.dumps(sources.fetch_sleeper_players()))
+    print(f"  cache: {cache_dir} "
+          f"({sum(f.stat().st_size for f in cache_dir.glob('*.json')) / 1e6:.1f} MB)")
+    return weeks
+
+
+# The season aggregate as it would be PUBLISHED — compact keys in the style the
+# feed already uses, one flat block per player. Defined here rather than in the
+# report so the byte cost measured there is the cost of a real payload.
+SEASON_KEYS = {
+    "wg": "games played",
+    "wt": "season PPR total",
+    "wpg": "PPR per game",
+    "whg": "half-PPR per game",
+    "wsg": "standard per game",
+    "wbo": "boom rate, % of games",
+    "wbu": "bust rate, % of games",
+}
+
+
+def season_payload(rec: dict, boom_bar: float, bust_bar: float) -> dict:
+    """One player's publishable season block (see SEASON_KEYS)."""
+    boom, bust = boom_bust_rates(rec, boom_bar, bust_bar)
+    return {
+        "wg": rec["g"],
+        "wt": rec["ppr"],
+        "wpg": rec["ppg_ppr"],
+        "whg": rec["ppg_half"],
+        "wsg": rec["ppg_std"],
+        "wbo": boom,
+        "wbu": bust,
+    }
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--season", type=int, default=2025)
+    ap.add_argument("--cache", default=os.environ.get("SD", ""))
+    ap.add_argument("--fetch", action="store_true",
+                    help="populate the scratch cache from Sleeper before summarising")
+    ap.add_argument("--force", action="store_true",
+                    help="with --fetch, refetch even if the cache looks complete")
+    args = ap.parse_args()
+
+    cache = _check_cache_dir(args.cache)
+    if args.fetch:
+        weeks = fetch_weeks(args.season, cache, force=args.force)
+    else:
+        weeks = load_cached_weeks(args.season, cache)
+        if not weeks:
+            raise SystemExit(f"empty cache at {cache}; re-run with --fetch")
+
+    players_map = json.loads((cache / "players.json").read_text())
+    agg = aggregate(weeks, players_map)
+    print(f"{args.season}: {len(weeks)} weeks cached, {len(agg)} players aggregated")
+    for pos in FANTASY_POSITIONS:
+        pool = [r for r in agg.values() if r["pos"] == pos]
+        print(f"  {pos:<4}{len(pool):>5} players"
+              f"{sum(r['g'] for r in pool):>7} player-weeks")
+
+
+if __name__ == "__main__":
+    main()
