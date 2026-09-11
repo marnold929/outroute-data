@@ -4,6 +4,7 @@
 import pathlib
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import build  # noqa: E402
@@ -59,6 +60,91 @@ class Preseason(unittest.TestCase):
         board = _board(16, 90, n="Josh Jacobs")
         aborts, _, _ = _guard(board, live=False, nudges={"Josh Jacobs": -90})
         self.assertEqual(aborts, [])
+
+
+class InSeason(unittest.TestCase):
+    """injuries_move_rank() True: a known cause lifts the bound to the backstop."""
+
+    def test_unexplained_drift_still_aborts(self):
+        for drift in (21, 29, -25):   # pushed down or pulled up, no cause either way
+            with self.subTest(drift=drift):
+                aborts, allowed, _ = _guard(_board(30, drift, n="X"), live=True)
+                self.assertEqual(aborts, [("X", drift)])
+                self.assertEqual(allowed, [])
+
+    def test_injury_on_a_non_top50_scope_player_is_not_the_guards_business(self):
+        # TreVeyon Henderson today: ADP rank 64, +31 [injury:Out] — out of scope.
+        aborts, allowed, _ = _guard(_board(64, 31, n="X", st="Out"), live=True)
+        self.assertEqual((aborts, allowed), ([], []))
+
+    def test_twenty_is_still_the_unexplained_bound(self):
+        aborts, _, _ = _guard(_board(30, 20, n="X"), live=True)
+        self.assertEqual(aborts, [])
+
+    def test_injury_explained_drift_passes(self):
+        # The two live aborts that froze the feed on 2026-09-10.
+        board = _board(16, 29, n="A.J. Brown", st="Out")
+        aborts, allowed, _ = _guard(board, live=True)
+        self.assertEqual(aborts, [])
+        self.assertEqual(allowed, [("A.J. Brown", 29)])
+        board = _board(37, 27, n="Brock Bowers", st="Out")
+        self.assertEqual(_guard(board, live=True)[:2], ([], [("Brock Bowers", 27)]))
+
+    def test_each_known_cause_counts(self):
+        cases = {
+            "depth-chart": (dict(dc=3), {}, ()),
+            "nudge": ({}, {"X": -40}, ()),
+            "trending": (dict(sid="42"), {}, [{"player_id": "42", "count": 9000}]),
+        }
+        for label, (fields, nudges, trending) in cases.items():
+            with self.subTest(label):
+                aborts, allowed, _ = _guard(_board(30, 35, n="X", **fields), live=True,
+                                            nudges=nudges, trending=trending)
+                self.assertEqual((aborts, allowed), ([], [("X", 35)]))
+
+    def test_backstop_still_fires_on_explained_drift(self):
+        # A correctly priced IR + depth-chart starter lands ~+75; past 80 is a
+        # runaway penalty (a doubled IR lands +121..+174 on the live board).
+        for drift in (build.DRIFT_BACKSTOP + 1, 130):
+            with self.subTest(drift=drift):
+                aborts, allowed, _ = _guard(_board(16, drift, n="X", st="IR", dc=3), live=True)
+                self.assertEqual(aborts, [("X", drift)])
+                self.assertEqual(allowed, [])
+        aborts, allowed, _ = _guard(_board(16, build.DRIFT_BACKSTOP, n="X", st="IR"), live=True)
+        self.assertEqual((aborts, allowed), ([], [("X", build.DRIFT_BACKSTOP)]))
+
+    def test_backstop_covers_nudged_players_in_season(self):
+        # A nudge is a known cause like the others, so it also answers to the
+        # backstop — a nudge/penalty stacking regression (Jacobs 66, not 46)
+        # on a top-50 player must still be caught.
+        aborts, _, _ = _guard(_board(16, 95, n="X", st="NA"), live=True, nudges={"X": -46})
+        self.assertEqual(aborts, [("X", 95)])
+
+
+class AssembleEndToEnd(unittest.TestCase):
+    """The same property through the real model: an `Out` tag on ADP-3 costs
+    30 picks once injuries are live, and nothing at all before kickoff."""
+
+    def _run(self, live):
+        adp_ppr = [{"name": f"Player {i}", "position": "WR", "team": "SEA", "adp": float(i)}
+                   for i in range(1, 81)]
+        sleeper = {str(i): {"full_name": f"Player {i}", "position": "WR", "team": "SEA",
+                            "status": "Active", "injury_status": "Out" if i == 3 else None}
+                   for i in range(1, 81)}
+        with mock.patch.object(model, "injuries_move_rank", lambda now=None: live):
+            players, _ = model.assemble(adp_ppr, [], [], sleeper, [], {}, {"rank_nudge": {}})
+        return players, _guard(players, live)
+
+    def test_live_out_moves_rank_and_passes_the_guard(self):
+        players, (aborts, allowed, _) = self._run(live=True)
+        self.assertEqual(aborts, [])
+        self.assertEqual([n for n, _ in allowed], ["Player 3"])
+        self.assertGreater(allowed[0][1], build.DRIFT_ABORT)
+
+    def test_preseason_out_does_not_move_rank(self):
+        players, (aborts, allowed, _) = self._run(live=False)
+        self.assertEqual((aborts, allowed), ([], []))
+        self.assertEqual(next(p["ro"] for p in players if p["n"] == "Player 3"), 3)
 
 
 class BackstopCalibration(unittest.TestCase):
