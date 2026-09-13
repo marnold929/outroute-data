@@ -5,6 +5,7 @@ Run locally:            python pipeline/build.py
 Offline fixture test:   python pipeline/build.py --fixtures
 """
 import argparse
+import collections
 import datetime
 import json
 import pathlib
@@ -23,6 +24,7 @@ MIN_PLAYERS = 150   # safety: never publish a suspiciously small file
 MIN_SCHEDULE_WEEKS = 17   # ESPN fetch degrades silently; never ship a gutted schedule
 MIN_ADP_ENTRIES = 100     # ppr/half/std rank sources must have real coverage
 MIN_SLEEPER_MATCH = 0.60  # fraction of PPR players that must match a Sleeper record
+MIN_USAGE_RATIO = 0.60    # fraction of players with usage stats (76-78% in a healthy build)
 # Fraction of the top-DRAFTABLE_N board that must carry real (non-sentinel) ADP.
 # A ratio, not an absolute count: FFC's pool size drifts through the offseason
 # and the Sleeper union pads totals, so any fixed count is too loose in August or
@@ -157,13 +159,24 @@ def main():
                   f"each); keeping previous file.")
             sys.exit(1)
 
-    # Usage stats: prefer the current season as soon as real games exist, else last season.
-    stats_season = SEASON_YEAR
-    weeks_stats = sources.fetch_season_stats(stats_season, fixtures=args.fixtures)
-    if not weeks_stats:
-        stats_season = SEASON_YEAR - 1
-        weeks_stats = sources.fetch_season_stats(stats_season, fixtures=args.fixtures)
-    print(f"  usage stats: season={stats_season} weeks_with_games={len(weeks_stats)}")
+    # Weekly stats for BOTH seasons. The running season feeds the in-season block
+    # and, per player once he has a real sample, the usage fields; the last
+    # complete season is what usage reports until then (model.USAGE_MIN_CURRENT_GAMES).
+    # Flipping the whole board to the running season the moment any game had
+    # been played is what collapsed usage to 51 players off a half-played Week 1.
+    #
+    # A week is countable ONLY when every one of its games is final: Sleeper
+    # serves stats for a Thursday opener while 14 Sunday games are still in the
+    # future, and publishing that as a week of football would be a lie.
+    weeks_stats = sources.fetch_season_stats(SEASON_YEAR, fixtures=args.fixtures)
+    prev_weeks_stats = sources.fetch_season_stats(SEASON_YEAR - 1, fixtures=args.fixtures)
+    completed_weeks = set()
+    if weeks_stats:
+        completed_weeks = sources.fetch_week_completion(
+            SEASON_YEAR, sorted(weeks_stats), fixtures=args.fixtures)
+    completed_stats = {w: rows for w, rows in weeks_stats.items() if w in completed_weeks}
+    print(f"  weekly stats: {SEASON_YEAR} weeks with games={sorted(weeks_stats) or '-'} "
+          f"complete={sorted(completed_weeks) or '-'}; {SEASON_YEAR - 1} weeks={len(prev_weeks_stats)}")
 
     players, adp_stat = model.assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, adp_sfx=adp_sfx)
 
@@ -193,30 +206,32 @@ def main():
                   f"(<{MIN_SLEEPER_MATCH:.0%}); name-matching degraded — keeping previous file.")
             sys.exit(1)
 
-    filled = model.attach_usage(players, weeks_stats, stats_season,
-                                current_season=(stats_season == SEASON_YEAR),
-                                sleeper_players=sleeper)
-    print(f"  usage populated for {filled}/{len(players)} players")
+    filled = model.attach_usage(players, completed_stats, SEASON_YEAR, current_season=True,
+                                sleeper_players=sleeper,
+                                fallback_weeks=prev_weeks_stats, fallback_season=SEASON_YEAR - 1)
+    by_source = collections.Counter(p["us"].split()[0] for p in players if p.get("us"))
+    print(f"  usage populated for {filled}/{len(players)} players "
+          f"({', '.join(f'{k}: {v}' for k, v in sorted(by_source.items())) or '-'})")
+    # Usage coverage guard. The app sorts Tiers by these fields, shows them on
+    # every detail sheet and feeds targets/carries to the waiver engine; a
+    # silently hollowed-out block (a failed last-season fetch, or a season flip
+    # onto a thin sample) breaks all three while every other guard stays green.
+    # Keep the previous file instead.
+    if not args.fixtures and filled < MIN_USAGE_RATIO * len(players):
+        print(f"ABORT: usage populated for only {filled}/{len(players)} players "
+              f"(<{MIN_USAGE_RATIO:.0%}); keeping previous file.")
+        sys.exit(1)
 
-    # Weekly scoring block + in-season rank (additive fields — see in_season.py).
-    # A week is countable ONLY when every one of its games is final: Sleeper
-    # serves stats for a Thursday opener while 14 Sunday games are still in the
-    # future, and publishing that as a week of football would be a lie. When the
-    # stats come from LAST season (preseason fallback), nothing is countable
-    # either — "this season" has to mean the season we are in.
-    completed_weeks = set()
-    if stats_season == SEASON_YEAR and weeks_stats:
-        completed_weeks = sources.fetch_week_completion(
-            SEASON_YEAR, sorted(weeks_stats), fixtures=args.fixtures)
+    # Weekly scoring block + in-season rank (additive fields — see in_season.py),
+    # over completed weeks of the running season only.
     ws_agg, ws_last, last_week = in_season.aggregate_completed(
         weeks_stats, sleeper, completed_weeks)
     n_complete = len(completed_weeks)
     ws_filled, prod_weight = in_season.attach_in_season(
         players, ws_agg, ws_last, n_complete)
     print(f"  in-season: {n_complete} completed week(s) of {SEASON_YEAR} "
-          f"(stats weeks present: {sorted(weeks_stats) or '-'}, "
-          f"complete: {sorted(completed_weeks) or '-'}), "
-          f"production weight {prod_weight:.2f}")
+          f"(complete: {sorted(completed_weeks) or '-'}), "
+          f"full-attendance production weight {prod_weight:.2f}")
     moved = sum(1 for p in players if p["isr"] != p["ro"])
     print(f"  in-season rank: weekly block on {ws_filled}/{len(players)} players, "
           f"{moved} differ from ro"
@@ -224,7 +239,7 @@ def main():
 
     # Volume-stat spot checks. WARN-only for the first real-run review — the
     # morning pass tightens the share-sum check to an ABORT once eyeballed.
-    if weeks_stats:
+    if completed_stats or prev_weeks_stats:
         def _top(pos, key, k):
             pool = [p for p in players if p["p"] == pos and p.get(key) is not None]
             return sorted(pool, key=lambda x: -x[key])[:k]

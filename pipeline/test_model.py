@@ -76,5 +76,62 @@ class InjuryStatusCoverage(unittest.TestCase):
             self.assertIn(st, model.INJURY_PENALTY, st)
 
 
+class UsageSeasonSource(unittest.TestCase):
+    """Usage keeps reporting the last complete season until a player has a real
+    sample in the running one — never a half-played kickoff weekend."""
+
+    @staticmethod
+    def _line(tgt, car=0, pts=0.0):
+        return {"gp": 1, "rec_tgt": tgt, "rush_att": car, "pts_ppr": pts,
+                "rec": tgt, "rec_yd": 10 * tgt}
+
+    def _run(self, current_weeks):
+        prev = {w: {"1": self._line(8, pts=15.0), "2": self._line(4, pts=8.0)}
+                for w in range(15, 19)}
+        players = [{"n": "Vet", "p": "WR", "t": "GB", "_pid": "1"},
+                   {"n": "Rook", "p": "WR", "t": "GB", "_pid": "3"},
+                   {"n": "NoMatch", "p": "WR", "t": "GB"}]
+        sleeper = {"1": {"team": "GB"}, "2": {"team": "GB"}, "3": {"team": "GB"}}
+        filled = model.attach_usage(players, current_weeks, 2026, current_season=True,
+                                    sleeper_players=sleeper,
+                                    fallback_weeks=prev, fallback_season=2025)
+        return filled, {p["n"]: p for p in players}
+
+    def test_no_completed_weeks_reports_last_season(self):
+        filled, by = self._run({})
+        self.assertEqual((by["Vet"]["us"], by["Vet"]["ut"]), ("2025", 8.0))
+        self.assertIsNone(by["Rook"]["us"])               # no history anywhere
+        self.assertEqual(filled, 1)
+
+    def test_one_game_is_not_enough(self):
+        _, by = self._run({1: {"1": self._line(12, pts=30.0), "3": self._line(9)}})
+        self.assertEqual((by["Vet"]["us"], by["Vet"]["ut"], by["Vet"]["up"]), ("2025", 8.0, 15.0))
+        self.assertIsNone(by["Rook"]["ut"])
+
+    def test_switches_at_the_threshold_with_an_honest_label(self):
+        cur = {w: {"1": self._line(12, pts=30.0), "3": self._line(9)}
+               for w in range(1, model.USAGE_MIN_CURRENT_GAMES + 1)}
+        _, by = self._run(cur)
+        n = model.USAGE_MIN_CURRENT_GAMES
+        self.assertEqual((by["Vet"]["us"], by["Vet"]["ut"]), (f"2026 wk1-{n}", 12.0))
+        self.assertEqual((by["Rook"]["us"], by["Rook"]["ut"]), (f"2026 wk1-{n}", 9.0))
+
+    def test_target_share_comes_from_the_same_season_as_the_label(self):
+        # Vet has 2026 games; teammate pid 2 does not. Vet's share must be of
+        # 2026 team targets (all his), not diluted by 2025 teammates.
+        cur = {w: {"1": self._line(10)} for w in (1, 2)}
+        _, by = self._run(cur)
+        self.assertEqual(by["Vet"]["uts"], 100.0)
+        _, by = self._run({})
+        self.assertAlmostEqual(by["Vet"]["uts"], 66.7)    # 8 of 12 team targets
+
+    def test_field_types_unchanged(self):
+        cur = {w: {"1": self._line(12, pts=30.0)} for w in (1, 2)}
+        _, by = self._run(cur)
+        for k in ("ut", "uc", "up", "uts", "ur", "uy"):
+            self.assertIsInstance(by["Vet"][k], float, k)
+        self.assertIsInstance(by["Vet"]["us"], str)
+
+
 if __name__ == "__main__":
     unittest.main()

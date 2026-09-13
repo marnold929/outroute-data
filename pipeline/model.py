@@ -419,7 +419,24 @@ def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, tea
     return players, stats
 
 
-def attach_usage(players, weeks_stats, season, current_season, sleeper_players=None):
+# Usage (ut/uc/up/... below) reads the running season only once a player has
+# this many games in COMPLETED weeks; until then it keeps reporting the last
+# complete season, labelled as such in `us`. Picked from the data, not by feel:
+# replaying 2025 weeks 1-6 against each player's rest-of-season usage,
+#
+#     own games this season      1       2       3+
+#     targets+carries/gm error   2.79    2.21    2.01    (2024 last-3: 2.55-2.70)
+#     PPR points/gm error        5.00    3.71    3.88    (2024 last-3: 4.30-4.56)
+#
+# ONE game is worse than last season on both counts — that is the Week 1 number
+# the feed shipped on kickoff weekend. TWO games already beat last season by
+# ~15-17%, and a third adds little. A higher bar would only keep a staler number
+# up longer; a lower one publishes the noise.
+USAGE_MIN_CURRENT_GAMES = 2
+
+
+def attach_usage(players, weeks_stats, season, current_season, sleeper_players=None,
+                 fallback_weeks=None, fallback_season=None):
     """Additive post-pass: per-game usage over each player's LAST 3 PLAYED games.
 
     Adds to every player dict (null when no data, e.g. rookies):
@@ -436,38 +453,57 @@ def attach_usage(players, weeks_stats, season, current_season, sleeper_players=N
       uyc = rushing yards per carry, window total >= 10 att (RB/QB)
       upa = pass att/gm, ucp = completion %, uya = yards/att
             (QB only, window total >= 10 att)
-    Season/window logic matches ut/uc/up (stats_season, current-season flip), so
-    everything updates weekly the moment the running season has games; uts widens
-    to the full season by design. Does not touch ranks/tiers — descriptive only.
-    """
-    order = sorted(weeks_stats.keys(), reverse=True)
+    Does not touch ranks/tiers — descriptive only.
 
-    # Season-long target totals over the FULL Sleeper stats map (not just our
-    # pool), attributed by each pid's CURRENT team — the numerator and denominator
-    # for uts. Target share MUST use a team-common window (the whole stats season),
-    # NOT each player's own last-3-played weeks: with per-player windows an injured
-    # WR1 (his strong early weeks) and the replacements who absorbed his targets
-    # (their later weeks) both read as WR1s, so a team's shares can sum to ~200%.
-    # Season totals make every current-roster player's share sum to ~100% by
-    # construction and give stable, comparable numbers (WR1 ~25-32%).
+    Which season each player's numbers come from: with `current_season`, the
+    caller passes ONLY completed weeks of the running season as `weeks_stats`.
+    A player with USAGE_MIN_CURRENT_GAMES or more games there is read from it
+    ("2026 wk1-3"); anyone short of that reads `fallback_weeks`, the last
+    complete season, labelled str(fallback_season). Every field for a player —
+    uts included — comes from the one season his label names.
+    """
     pid_team = {}
     if sleeper_players:
         for pid, sp in sleeper_players.items():
             if isinstance(sp, dict) and sp.get("team"):
                 pid_team[pid] = sp["team"]
-    pl_season_tgt = {}     # pid  -> season total rec_tgt
-    team_season_tgt = {}   # team -> season total rec_tgt (current roster)
-    for w in order:
-        for pid, st in weeks_stats[w].items():
-            if not isinstance(st, dict):
-                continue
-            t = st.get("rec_tgt") or 0
-            if not t:
-                continue
-            pl_season_tgt[pid] = pl_season_tgt.get(pid, 0) + t
-            team = pid_team.get(pid)
-            if team:
-                team_season_tgt[team] = team_season_tgt.get(team, 0) + t
+
+    def target_totals(weeks):
+        # Season-long target totals over the FULL Sleeper stats map (not just our
+        # pool), attributed by each pid's CURRENT team — the numerator and
+        # denominator for uts. Target share MUST use a team-common window (the
+        # whole stats season), NOT each player's own last-3-played weeks: with
+        # per-player windows an injured WR1 (his strong early weeks) and the
+        # replacements who absorbed his targets (their later weeks) both read as
+        # WR1s, so a team's shares can sum to ~200%. Season totals make every
+        # current-roster player's share sum to ~100% by construction and give
+        # stable, comparable numbers (WR1 ~25-32%).
+        pl_tgt, team_tgt = {}, {}
+        for w in weeks:
+            for pid, st in weeks[w].items():
+                if not isinstance(st, dict):
+                    continue
+                t = st.get("rec_tgt") or 0
+                if not t:
+                    continue
+                pl_tgt[pid] = pl_tgt.get(pid, 0) + t
+                team = pid_team.get(pid)
+                if team:
+                    team_tgt[team] = team_tgt.get(team, 0) + t
+        return pl_tgt, team_tgt
+
+    def last_games(weeks, pid, limit):
+        out = []
+        for w in sorted(weeks, reverse=True):
+            st = weeks[w].get(pid)
+            if isinstance(st, dict) and (st.get("gp") or 0) >= 1:
+                out.append((w, st))
+                if len(out) == limit:
+                    break
+        return out
+
+    fallback_weeks = fallback_weeks or {}
+    totals = {"cur": target_totals(weeks_stats), "fb": target_totals(fallback_weeks)}
 
     filled = 0
     for p in players:
@@ -477,16 +513,14 @@ def attach_usage(players, weeks_stats, season, current_season, sleeper_players=N
         p["upa"] = p["ucp"] = p["uya"] = None
         if not pid:
             continue
-        games = []
-        for w in order:
-            st = weeks_stats[w].get(pid)
-            if isinstance(st, dict) and (st.get("gp") or 0) >= 1:
-                games.append((w, st))
-                if len(games) == 3:
-                    break
+        games = last_games(weeks_stats, pid, 3)
+        src = "cur"
+        if current_season and len(last_games(weeks_stats, pid, USAGE_MIN_CURRENT_GAMES)) < USAGE_MIN_CURRENT_GAMES:
+            games, src = last_games(fallback_weeks, pid, 3), "fb"
         if not games:
             continue
         n = len(games)
+        pl_season_tgt, team_season_tgt = totals[src]
 
         def avg(key):
             return sum((s.get(key) or 0) for _, s in games) / n
@@ -495,7 +529,10 @@ def attach_usage(players, weeks_stats, season, current_season, sleeper_players=N
         p["uc"] = round(avg("rush_att"), 1)
         p["up"] = round(avg("pts_ppr"), 1)
         wks = sorted(w for w, _ in games)
-        p["us"] = f"{season} wk{wks[0]}-{wks[-1]}" if current_season else str(season)
+        if src == "fb":
+            p["us"] = str(fallback_season)
+        else:
+            p["us"] = f"{season} wk{wks[0]}-{wks[-1]}" if current_season else str(season)
 
         pos = p.get("p")
         if pos in ("RB", "WR", "TE"):
