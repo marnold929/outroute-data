@@ -7,6 +7,7 @@ import io
 import pathlib
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import in_season  # noqa: E402
@@ -145,6 +146,77 @@ class BlendBehaviour(unittest.TestCase):
         ppg[rbs[-1]["sid"]] = 999.0
         in_season.attach_in_season(players, _agg(ppg, games=10), {}, weeks_complete=10)
         self.assertGreaterEqual(rbs[-1]["isr"], rbs[0]["ro"])
+
+
+class PlayerGamesWeighting(unittest.TestCase):
+    """The production weight is the league's w(n) shrunk by the player's own
+    share of available games: full attendance gets all of it."""
+
+    def _board(self, weeks, games_by_rb):
+        """40-player board; RB-last leads RBs in PPG. games_by_rb: sid -> games."""
+        players = _players(40)
+        rbs = [p for p in players if p["p"] == "RB"]
+        agg = {}
+        for p in rbs:
+            g = games_by_rb.get(p["sid"], weeks)
+            if g:
+                ppg = 999.0 if p is rbs[-1] else 100.0 - p["ro"]
+                agg[p["sid"]] = {"g": g, "ppr": ppg * g, "half": ppg * g, "std": ppg * g}
+        return players, rbs, agg
+
+    def test_weight_at_0_1_4_10_weeks(self):
+        for n in (0, 1, 4, 10):
+            w = in_season.production_weight(n)
+            self.assertEqual(in_season.player_weight(w, n, n), w)            # every week
+            if n:
+                half = in_season.player_weight(w, max(1, n // 2), n)
+                self.assertAlmostEqual(half, w * (max(1, n // 2) / n) ** in_season.PROD_GAMES_EXPONENT)
+                self.assertLessEqual(half, w)
+            self.assertEqual(in_season.player_weight(w, 0, n), 0.0)          # no games
+        self.assertEqual(in_season.player_weight(0.0, 5, 5), 0.0)            # zero weeks
+
+    def test_full_attendance_moves_as_far_as_before(self):
+        # The per-player shrink must not damp a player who has played every week.
+        for n in (1, 4, 10):
+            players, rbs, agg = self._board(n, {})
+            in_season.attach_in_season(players, agg, {}, n)
+            share_one = rbs[-1]["ro"] - rbs[-1]["isr"]
+            with mock.patch.object(in_season, "PROD_GAMES_EXPONENT", 0.0):   # old formula
+                players, rbs, agg = self._board(n, {})
+                in_season.attach_in_season(players, agg, {}, n)
+            self.assertEqual(share_one, rbs[-1]["ro"] - rbs[-1]["isr"], n)
+
+    def test_zero_weeks_is_still_exactly_ro(self):
+        players, rbs, agg = self._board(0, {p["sid"]: 3 for p in _players(40)})
+        in_season.attach_in_season(players, agg, {}, 0, set())
+        self.assertEqual([p["isr"] for p in players], [p["ro"] for p in players])
+
+    def test_one_game_at_week_10_sits_at_his_market_rank(self):
+        breakout_sid = _players(40)[-1]["sid"]      # RB-last is the 999-PPG leader
+        players, rbs, agg = self._board(10, {breakout_sid: 1})
+        self.assertEqual(rbs[-1]["sid"], breakout_sid)
+        # Shipped config: the floor keeps him out of production entirely.
+        in_season.attach_in_season(players, agg, {}, 10)
+        self.assertEqual(rbs[-1]["isr"], rbs[-1]["ro"])
+        # With the floor switched off the per-player weight alone must still
+        # hold him within a couple of spots: 1 of 10 games -> 1% of w(10).
+        with mock.patch.object(in_season, "PROD_MIN_GAMES_SHARE", 0.0):
+            players, rbs, agg = self._board(10, {breakout_sid: 1})
+            in_season.attach_in_season(players, agg, {}, 10)
+            one_game = rbs[-1]["ro"] - rbs[-1]["isr"]
+            players, rbs, agg = self._board(10, {})
+            in_season.attach_in_season(players, agg, {}, 10)
+            every_game = rbs[-1]["ro"] - rbs[-1]["isr"]
+        self.assertLessEqual(one_game, 2)
+        self.assertGreater(every_game, 10 * max(one_game, 1))
+
+    def test_bye_is_not_a_missed_game(self):
+        players = _players(4)
+        p = players[0]
+        p["bye"] = 3
+        self.assertEqual(in_season.games_available(p, {1, 2, 3, 4}), 3)
+        w = in_season.production_weight(4)
+        self.assertEqual(in_season.player_weight(w, 3, in_season.games_available(p, {1, 2, 3, 4})), w)
 
 
 class SmallSampleFloor(unittest.TestCase):
