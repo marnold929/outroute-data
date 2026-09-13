@@ -91,6 +91,37 @@ def fetch_schedule(year: int, fixtures: bool = False) -> dict:
     return schedule
 
 
+def fetch_week_completion(year: int, weeks=None, fixtures: bool = False) -> set:
+    """The weeks of `year` whose games are ALL final, as a set of week numbers.
+
+    A week counts only when ESPN lists games for it and EVERY one of them is
+    completed. Anything we cannot positively verify — a failed fetch, a week
+    ESPN does not know about, a week still in progress — is left out, so a
+    half-played week can never be counted as a whole one. That matters in the
+    live window: through Saturday of week 1, Sleeper is already serving stats
+    for the Wednesday and Thursday openers while 14 games have not kicked off.
+
+    `weeks` limits the fetch to the weeks worth asking about (the weeks that
+    have stats at all); the default walks the whole regular season.
+
+    Fixtures carry no game status, so fixture builds report nothing completed.
+    """
+    if fixtures:
+        return set()
+    done = set()
+    for week in (range(1, 19) if weeks is None else weeks):
+        try:
+            data = _get_json(ESPN_SCOREBOARD_URL.format(week=int(week), year=year))
+        except Exception:
+            continue
+        games = [comp for event in data.get("events", [])
+                 for comp in event.get("competitions", [])]
+        if games and all(((c.get("status") or {}).get("type") or {}).get("completed")
+                         for c in games):
+            done.add(int(week))
+    return done
+
+
 ESPN_NEWS_URL = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/news?limit=50"
 
 

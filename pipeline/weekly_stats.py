@@ -45,7 +45,10 @@ import json
 import os
 from pathlib import Path
 
-from . import sources
+try:                  # package import: python3 -m pipeline.weekly_stats
+    from . import sources
+except ImportError:   # script import: build.py puts pipeline/ on sys.path
+    import sources
 
 ROOT = Path(__file__).resolve().parent.parent
 

@@ -13,6 +13,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import blurbs
+import in_season
 import model
 import sources
 
@@ -196,6 +197,30 @@ def main():
                                 current_season=(stats_season == SEASON_YEAR),
                                 sleeper_players=sleeper)
     print(f"  usage populated for {filled}/{len(players)} players")
+
+    # Weekly scoring block + in-season rank (additive fields — see in_season.py).
+    # A week is countable ONLY when every one of its games is final: Sleeper
+    # serves stats for a Thursday opener while 14 Sunday games are still in the
+    # future, and publishing that as a week of football would be a lie. When the
+    # stats come from LAST season (preseason fallback), nothing is countable
+    # either — "this season" has to mean the season we are in.
+    completed_weeks = set()
+    if stats_season == SEASON_YEAR and weeks_stats:
+        completed_weeks = sources.fetch_week_completion(
+            SEASON_YEAR, sorted(weeks_stats), fixtures=args.fixtures)
+    ws_agg, ws_last, last_week = in_season.aggregate_completed(
+        weeks_stats, sleeper, completed_weeks)
+    n_complete = len(completed_weeks)
+    ws_filled, prod_weight = in_season.attach_in_season(
+        players, ws_agg, ws_last, n_complete)
+    print(f"  in-season: {n_complete} completed week(s) of {SEASON_YEAR} "
+          f"(stats weeks present: {sorted(weeks_stats) or '-'}, "
+          f"complete: {sorted(completed_weeks) or '-'}), "
+          f"production weight {prod_weight:.2f}")
+    moved = sum(1 for p in players if p["isr"] != p["ro"])
+    print(f"  in-season rank: weekly block on {ws_filled}/{len(players)} players, "
+          f"{moved} differ from ro"
+          + ("" if n_complete else "  (zero completed weeks — isr == ro by construction)"))
 
     # Volume-stat spot checks. WARN-only for the first real-run review — the
     # morning pass tightens the share-sum check to an ABORT once eyeballed.
@@ -385,6 +410,11 @@ def main():
         "meta": {
             "season": str(SEASON_YEAR),
             "updated": datetime.date.today().isoformat(),
+            # Additive: context for the in-season rank. Older app builds decode
+            # meta with synthesized Codable and ignore keys they don't know.
+            "weeks_complete": n_complete,
+            "last_week": last_week,
+            "prod_weight": round(prod_weight, 3),
             "sources": [
                 "OutRoute ranking model v1",
                 "Market ADP: Fantasy Football Calculator (live mock drafts)",
