@@ -1,7 +1,9 @@
 """Unit tests for the in-season rank blend (pipeline/in_season.py).  Run:
     python3 -m unittest pipeline/test_in_season.py
 (stdlib unittest — no pytest dependency; pytest collects these too)."""
+import contextlib
 import copy
+import io
 import pathlib
 import sys
 import unittest
@@ -207,6 +209,57 @@ class CompletedWeeksOnly(unittest.TestCase):
         weeks, pmap = self._weeks()
         self.assertEqual(in_season.aggregate_completed(weeks, pmap, set()),
                          ({}, {}, None))
+
+
+class WeekCompletion(unittest.TestCase):
+    """sources.fetch_week_completion: what counts as a finished week."""
+
+    @staticmethod
+    def _board(*statuses):
+        return {"events": [{"competitions": [{"status": {"type": {
+            "name": name, "completed": name == "STATUS_FINAL"}}}]} for name in statuses]}
+
+    def _run(self, boards, weeks):
+        import sources
+        real = sources._get_json
+
+        def fake(url):
+            week = int(url.split("week=")[1].split("&")[0])
+            board = boards.get(week)
+            if board is None:
+                raise OSError("simulated fetch failure")
+            return board
+        sources._get_json = fake
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                return sources.fetch_week_completion(2026, weeks)
+        finally:
+            sources._get_json = real
+
+    def test_thursday_played_sunday_not_is_incomplete(self):
+        board = self._board("STATUS_FINAL", "STATUS_FINAL", "STATUS_SCHEDULED")
+        self.assertEqual(self._run({1: board}, [1]), set())
+
+    def test_in_progress_game_is_incomplete(self):
+        board = self._board("STATUS_FINAL", "STATUS_IN_PROGRESS")
+        self.assertEqual(self._run({1: board}, [1]), set())
+
+    def test_cancelled_game_does_not_hold_the_week_open(self):
+        board = self._board("STATUS_FINAL", "STATUS_CANCELED")
+        self.assertEqual(self._run({17: board}, [17]), {17})
+
+    def test_empty_scoreboard_is_not_complete(self):
+        self.assertEqual(self._run({1: {"events": []}}, [1]), set())
+
+    def test_failed_fetch_before_a_verified_week_is_inferred(self):
+        final = self._board("STATUS_FINAL")
+        self.assertEqual(self._run({1: final, 3: final}, [1, 2, 3]), {1, 2, 3})
+
+    def test_latest_week_is_never_inferred(self):
+        final = self._board("STATUS_FINAL")
+        self.assertEqual(self._run({1: final}, [1, 2]), {1})
+        partial = self._board("STATUS_FINAL", "STATUS_SCHEDULED")
+        self.assertEqual(self._run({1: final, 2: partial}, [1, 2]), {1})
 
 
 if __name__ == "__main__":
