@@ -228,7 +228,7 @@ def main():
         weeks_stats, sleeper, completed_weeks)
     n_complete = len(completed_weeks)
     ws_filled, prod_weight = in_season.attach_in_season(
-        players, ws_agg, ws_last, n_complete)
+        players, ws_agg, ws_last, n_complete, completed_weeks)
     print(f"  in-season: {n_complete} completed week(s) of {SEASON_YEAR} "
           f"(complete: {sorted(completed_weeks) or '-'}), "
           f"full-attendance production weight {prod_weight:.2f}")

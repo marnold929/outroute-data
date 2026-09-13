@@ -72,9 +72,37 @@ except ImportError:           # run as a script (build.py puts pipeline/ on sys.
 # 149. Half the season's weeks is the cheapest line that removes that noise
 # without touching anyone who actually plays. The published weekly block is NOT
 # gated on this — one game is enough to report one game.
+#
+# PROD_GAMES_EXPONENT — the curve above is the LEAGUE's clock; it says how much
+# a full season-to-date sample is worth. Each player's own weight is then
+#
+#     w_player = w(n) * (games played / games available) ** PROD_GAMES_EXPONENT
+#
+# where games available is the completed weeks minus his bye. A player who has
+# played every week gets exactly w(n); one who has played a fraction of them
+# sits closer to his market rank. Without this, two games of an injury-
+# shortened start counted the same as four healthy ones: on the 2025 stand-in
+# (2025 weeks over today's board) Burrow, 2 of 4 and hurt in the second, fell
+# ro 52 -> 129 at week 4.
+#
+#     Burrow at week 4 (2 of 4):     exponent 0 (old) +77   1: +38   2: +12
+#     Franklin at week 4 (4 of 4):                  -131      -130     -129
+#     Horton at week 10 (8 of 9):                   -195      -177     -152
+#
+# Why squared and not linear: the linear share is what sampling error alone
+# justifies (a per-game rate's variance scales with 1/games), but short samples
+# are worse than merely small — the game a player got hurt in counts as a full
+# game at a fraction of his points, so the missing weeks and the bad one travel
+# together. Squaring halves a half-season sample's weight again; the cost is a
+# player who missed one game of nine keeps 0.79 of the weight, not 0.89.
+# Full attendance is untouched, so the deep tail is NOT damped: a WR5 who has
+# played every week keeps the full weight however far his depth-chart market
+# slot is from his production. It does not rescue a player who has played and
+# not produced — Loveland (3 of 4, 2.4 PPG) still falls, by less.
 PROD_WEIGHT_HALF = 9.0
 PROD_WEIGHT_MAX = 0.60
 PROD_MIN_GAMES_SHARE = 0.5
+PROD_GAMES_EXPONENT = 2.0
 
 # Positions the production rank is computed within (see production_slots).
 POSITIONS = ("QB", "RB", "WR", "TE", "K", "DST")
@@ -90,6 +118,21 @@ def production_weight(weeks_complete: int) -> float:
     if n == 0:
         return 0.0
     return min(PROD_WEIGHT_MAX, n / (n + PROD_WEIGHT_HALF))
+
+
+def games_available(player: dict, completed_weeks) -> int:
+    """Completed weeks his team actually played: his bye is not a missed game."""
+    weeks = set(completed_weeks)
+    return len(weeks - {player.get("bye")})
+
+
+def player_weight(league_weight: float, games: int, available: int) -> float:
+    """One player's production weight: the league's w(n), shrunk by the share of
+    available games he actually played (see PROD_GAMES_EXPONENT)."""
+    if league_weight <= 0 or available <= 0 or games <= 0:
+        return 0.0
+    share = min(1.0, games / available)
+    return league_weight * share ** PROD_GAMES_EXPONENT
 
 
 def per_game(rec: dict, fmt: str) -> float:
@@ -135,14 +178,19 @@ def production_slots(players: list[dict], agg: dict, weeks_complete: int) -> dic
 
 
 def attach_in_season(players: list[dict], agg: dict, last_week_points: dict,
-                     weeks_complete: int) -> tuple[int, float]:
-    """Publish the weekly block and `isr`. Returns (players_with_stats, weight).
+                     weeks_complete: int, completed_weeks=None) -> tuple[int, float]:
+    """Publish the weekly block and `isr`. Returns (players_with_stats, weight),
+    where weight is the league's w(n) — what a full-attendance player gets.
 
     `agg` is weekly_stats.aggregate() over COMPLETED weeks only, keyed by
     Sleeper pid; `last_week_points` maps pid -> (ppr, half, std) for the last
-    completed week.
+    completed week. `completed_weeks` is the set of week numbers (for byes);
+    it defaults to weeks 1..weeks_complete.
     """
     weight = production_weight(weeks_complete)
+    if completed_weeks is None:
+        completed_weeks = range(1, max(0, int(weeks_complete or 0)) + 1)
+    completed_weeks = set(completed_weeks)
 
     filled = 0
     for p in players:
@@ -159,8 +207,11 @@ def attach_in_season(players: list[dict], agg: dict, last_week_points: dict,
         filled += 1
 
     slots = production_slots(players, agg, weeks_complete)
-    blended = {p["id"]: (1.0 - weight) * p["ro"] + weight * slots[p["id"]]
-               for p in players}
+    blended = {}
+    for p in players:
+        games = (agg.get(p.get("sid") or "") or {}).get("g") or 0
+        w = player_weight(weight, games, games_available(p, completed_weeks))
+        blended[p["id"]] = (1.0 - w) * p["ro"] + w * slots[p["id"]]
     # Ties (and every player when weight == 0) fall back to market order, so a
     # zero-weight blend reproduces `ro` exactly rather than merely closely.
     for i, p in enumerate(sorted(players, key=lambda p: (blended[p["id"]], p["ro"]))):
