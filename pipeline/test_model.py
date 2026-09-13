@@ -125,6 +125,26 @@ class UsageSeasonSource(unittest.TestCase):
         _, by = self._run({})
         self.assertAlmostEqual(by["Vet"]["uts"], 66.7)    # 8 of 12 team targets
 
+    def test_team_target_shares_never_mix_seasons(self):
+        # Vet is on 2026 numbers (all of the team's 2026 targets); teammate 2 has
+        # no 2026 games and falls back. His 2025 share must not stack on top.
+        cur = {w: {"1": self._line(10)} for w in (1, 2)}
+        prev = {w: {"1": self._line(8), "2": self._line(4)} for w in range(15, 19)}
+        players = [{"n": "Vet", "p": "WR", "t": "GB", "_pid": "1"},
+                   {"n": "Mate", "p": "WR", "t": "GB", "_pid": "2"}]
+        sleeper = {"1": {"team": "GB"}, "2": {"team": "GB"}}
+        model.attach_usage(players, cur, 2026, True, sleeper_players=sleeper,
+                           fallback_weeks=prev, fallback_season=2025)
+        vet, mate = players
+        self.assertEqual((mate["us"], mate["ut"], mate["uts"]), ("2025", 4.0, None))
+        self.assertLessEqual(sum(p["uts"] or 0 for p in players), 100.0)
+
+    def test_nobody_switched_keeps_last_seasons_shares(self):
+        # Week 1 complete, nobody has 2 games: the whole team is on 2025, whose
+        # shares sum fine, so they must all still publish.
+        _, by = self._run({1: {"1": self._line(12)}})
+        self.assertAlmostEqual(by["Vet"]["uts"], 66.7)
+
     def test_field_types_unchanged(self):
         cur = {w: {"1": self._line(12, pts=30.0)} for w in (1, 2)}
         _, by = self._run(cur)

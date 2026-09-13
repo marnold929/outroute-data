@@ -459,8 +459,9 @@ def attach_usage(players, weeks_stats, season, current_season, sleeper_players=N
     caller passes ONLY completed weeks of the running season as `weeks_stats`.
     A player with USAGE_MIN_CURRENT_GAMES or more games there is read from it
     ("2026 wk1-3"); anyone short of that reads `fallback_weeks`, the last
-    complete season, labelled str(fallback_season). Every field for a player —
-    uts included — comes from the one season his label names.
+    complete season, labelled str(fallback_season). Every field for a player
+    comes from the one season his label names; a fallback player's uts is null
+    once a teammate has switched (shares only sum within one season — see below).
     """
     pid_team = {}
     if sleeper_players:
@@ -505,6 +506,18 @@ def attach_usage(players, weeks_stats, season, current_season, sleeper_players=N
     fallback_weeks = fallback_weeks or {}
     totals = {"cur": target_totals(weeks_stats), "fb": target_totals(fallback_weeks)}
 
+    def source(pid):
+        """("cur" | "fb", his last 3 played games in that season)."""
+        if current_season and len(last_games(weeks_stats, pid, USAGE_MIN_CURRENT_GAMES)) < USAGE_MIN_CURRENT_GAMES:
+            return "fb", last_games(fallback_weeks, pid, 3)
+        return "cur", last_games(weeks_stats, pid, 3)
+
+    sources_by_pid = {p["_pid"]: source(p["_pid"]) for p in players if p.get("_pid")}
+    # Teams with at least one player already on the running season's numbers.
+    switched_teams = {p.get("t") for p in players
+                      if p.get("_pid") and sources_by_pid[p["_pid"]][0] == "cur"
+                      and sources_by_pid[p["_pid"]][1]}
+
     filled = 0
     for p in players:
         pid = p.pop("_pid", None)
@@ -513,10 +526,7 @@ def attach_usage(players, weeks_stats, season, current_season, sleeper_players=N
         p["upa"] = p["ucp"] = p["uya"] = None
         if not pid:
             continue
-        games = last_games(weeks_stats, pid, 3)
-        src = "cur"
-        if current_season and len(last_games(weeks_stats, pid, USAGE_MIN_CURRENT_GAMES)) < USAGE_MIN_CURRENT_GAMES:
-            games, src = last_games(fallback_weeks, pid, 3), "fb"
+        src, games = sources_by_pid[pid]
         if not games:
             continue
         n = len(games)
@@ -540,8 +550,15 @@ def attach_usage(players, weeks_stats, season, current_season, sleeper_players=N
             p["uy"] = round(avg("rec_yd"), 1)
             # Season-long target share (see the precompute note above): his season
             # targets over his CURRENT team's season target total.
+            # Shares only add up within ONE season. Once a teammate is on this
+            # season's numbers he owns his slice of this season's targets, so a
+            # last-season share on top of that double-counts the team (a 2025
+            # stand-in at week 2 summed KC and TB to 136% and would have tripped
+            # the 130% abort). A fallback player on such a team keeps every other
+            # usage field; his uts stays null until he switches too.
             team_tot = team_season_tgt.get(p.get("t"), 0)
-            if team_tot > 0:
+            mixed = src == "fb" and p.get("t") in switched_teams
+            if team_tot > 0 and not mixed:
                 p["uts"] = round(100.0 * pl_season_tgt.get(pid, 0) / team_tot, 1)
         if pos in ("RB", "QB"):
             att = sum((s.get("rush_att") or 0) for _, s in games)
