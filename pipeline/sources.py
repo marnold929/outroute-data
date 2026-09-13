@@ -104,22 +104,54 @@ def fetch_week_completion(year: int, weeks=None, fixtures: bool = False) -> set:
     `weeks` limits the fetch to the weeks worth asking about (the weeks that
     have stats at all); the default walks the whole regular season.
 
+    Weeks are played in order, so a week EARLIER than one verified complete is
+    itself over. That inference covers the two ways a finished week would
+    otherwise drop out for good: a transient fetch failure (a mid-season blip
+    would silently shrink every player's games and snap the blend back toward
+    the market for a cycle), and a cancelled game — see week_is_final. The
+    latest week is never inferred; it has to verify on its own.
+
     Fixtures carry no game status, so fixture builds report nothing completed.
     """
     if fixtures:
         return set()
-    done = set()
-    for week in (range(1, 19) if weeks is None else weeks):
+    asked = sorted(int(w) for w in (range(1, 19) if weeks is None else weeks))
+    done, failed = set(), []
+    for week in asked:
         try:
-            data = _get_json(ESPN_SCOREBOARD_URL.format(week=int(week), year=year))
-        except Exception:
+            data = _get_json(ESPN_SCOREBOARD_URL.format(week=week, year=year))
+        except Exception as exc:
+            failed.append(f"{week} ({type(exc).__name__})")
             continue
-        games = [comp for event in data.get("events", [])
-                 for comp in event.get("competitions", [])]
-        if games and all(((c.get("status") or {}).get("type") or {}).get("completed")
-                         for c in games):
-            done.add(int(week))
+        if week_is_final(data):
+            done.add(week)
+    if failed:
+        print(f"  WARNING: ESPN scoreboard fetch failed for week(s) {', '.join(failed)}")
+    if done:
+        inferred = {w for w in asked if w < max(done)} - done
+        if inferred:
+            print(f"  WARNING: week(s) {sorted(inferred)} not verified final but precede "
+                  f"verified week {max(done)}; counted as complete")
+            done |= inferred
     return done
+
+
+# A cancelled game will never be "completed" — ESPN listed 2022 week 17 BUF@CIN
+# as STATUS_CANCELED with completed=false — but it is not going to be played
+# either, so it must not hold its week open forever.
+_FINAL_STATUS_NAMES = {"STATUS_CANCELED"}
+
+
+def week_is_final(scoreboard: dict) -> bool:
+    """True when an ESPN scoreboard payload lists games and every one is over."""
+    games = [comp for event in scoreboard.get("events", [])
+             for comp in event.get("competitions", [])]
+
+    def over(comp):
+        status = (comp.get("status") or {}).get("type") or {}
+        return bool(status.get("completed")) or status.get("name") in _FINAL_STATUS_NAMES
+
+    return bool(games) and all(over(c) for c in games)
 
 
 ESPN_NEWS_URL = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/news?limit=50"
