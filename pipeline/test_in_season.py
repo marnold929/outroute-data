@@ -104,7 +104,7 @@ class PublishedBlock(unittest.TestCase):
         in_season.attach_in_season(players, agg, {"3": (20.0, 18.0, 16.0)},
                                    weeks_complete=4)
         self.assertEqual(set(p) - market_keys,
-                         {"isr", "sr", "srh", "srs", "wg", "wpg", "whg", "wsg", "wlp", "wlh", "wls"})
+                         {"isr", "ish", "iss", "sr", "srh", "srs", "wg", "wpg", "whg", "wsg", "wlp", "wlh", "wls"})
 
     def test_isr_is_a_dense_ranking(self):
         players = _players(40)

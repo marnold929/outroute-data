@@ -262,20 +262,33 @@ def attach_in_season(players: list[dict], agg: dict, last_week_points: dict,
     # (PROD_MIN_GAMES_SHARE) or with no games keeps his own ro as his slot:
     # we cannot rank him on production yet, and his market rank is the honest
     # placeholder, not a guess at points he hasn't scored.
+    #
+    # Projected boards: isr (PPR), ish (half), iss (standard). Built the same
+    # way for every format — production slot in that format's points per game,
+    # travel-clamped, then blended with ro at the player's weight.
+    #
+    # The approximation, stated plainly: the market anchor (ro, from FFC's PPR
+    # pool) is PPR-only, so ish and iss blend a PPR-anchored market rank with
+    # half/standard production. A pass-catching back is over-priced by that
+    # anchor in standard and only production pulls him back. It is still a
+    # better standard board than a PPR board shown under a STANDARD label.
     for field, fmt in (("sr", "ppr"), ("srh", "half"), ("srs", "std")):
         _publish_rank(players, production_slots(players, agg, weeks_complete, fmt), field)
 
-    slots = production_slots(players, agg, weeks_complete)
-    blended = {}
+    weights = {}
     for p in players:
         games = (agg.get(p.get("sid") or "") or {}).get("g") or 0
-        w = player_weight(weight, games, games_available(p, completed_weeks))
-        slot = clamp_slot(slots[p["id"]], p["ro"], weeks_complete)
-        blended[p["id"]] = (1.0 - w) * p["ro"] + w * slot
-    # Ties (and every player when weight == 0) fall back to market order, so a
-    # zero-weight blend reproduces `ro` exactly rather than merely closely.
-    for i, p in enumerate(sorted(players, key=lambda p: (blended[p["id"]], p["ro"]))):
-        p["isr"] = i + 1
+        weights[p["id"]] = player_weight(weight, games, games_available(p, completed_weeks))
+    for field, fmt in (("isr", "ppr"), ("ish", "half"), ("iss", "std")):
+        slots = production_slots(players, agg, weeks_complete, fmt)
+        blended = {}
+        for p in players:
+            w = weights[p["id"]]
+            slot = clamp_slot(slots[p["id"]], p["ro"], weeks_complete)
+            blended[p["id"]] = (1.0 - w) * p["ro"] + w * slot
+        # Ties (and every player when weight == 0) fall back to market order, so
+        # a zero-weight blend reproduces `ro` exactly rather than merely closely.
+        _publish_rank(players, blended, field)
     return filled, weight
 
 
