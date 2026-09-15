@@ -2,6 +2,7 @@
 committed pipeline/market_anchor/ snapshot).  Run:
     python3 -m unittest pipeline/test_market_anchor.py
 (stdlib unittest — no pytest dependency; pytest collects these too)."""
+import copy
 import json
 import pathlib
 import subprocess
@@ -14,6 +15,7 @@ from unittest import mock
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import build  # noqa: E402
 import freeze_market  # noqa: E402
+import in_season  # noqa: E402
 import model  # noqa: E402
 import sources  # noqa: E402
 
@@ -85,6 +87,31 @@ class Snapshot(unittest.TestCase):
                                          capture_output=True, text=True, check=True).stdout)
         self.assertEqual(self.doc["players"], freeze_market.pool_from_feed(feed))
         self.assertEqual(SNAPSHOT.read_text(), freeze_market.render(self.doc))
+
+
+class InSeasonRankOnFrozenAnchor(unittest.TestCase):
+    """A frozen market must not freeze `isr`: its production side grows with
+    completed weeks exactly as in_season's curve says, and `ro`/`adp` stay the
+    frozen anchor's."""
+
+    def test_production_side_grows_with_completed_weeks(self):
+        board, _ = model.assemble(json.loads(SNAPSHOT.read_text())["players"], [], [], {}, [], {}, {})
+        for p in board:
+            p["sid"] = p["id"]
+        # Every player plays every week, and per-game production runs exactly
+        # against market order (PPG grows with ro), so any weight shows as movement.
+        anchor = [(p["id"], p["ro"], p["adp"]) for p in board]
+        spread = []
+        for n in (0, 1, 4, 10):
+            ps = copy.deepcopy(board)
+            agg = {p["id"]: {"g": n, "ppr": 10.0 * n * p["ro"], "half": 0.0, "std": 0.0} for p in ps} if n else {}
+            _, w = in_season.attach_in_season(ps, agg, {}, n, set(range(1, n + 1)))
+            self.assertAlmostEqual(w, in_season.production_weight(n))
+            self.assertEqual([(p["id"], p["ro"], p["adp"]) for p in ps], anchor)
+            spread.append(sum(abs(p["isr"] - p["ro"]) for p in ps if p["ro"] <= 150) / 150)
+        self.assertEqual(spread[0], 0.0)                   # zero weeks: isr == ro exactly
+        self.assertEqual(spread, sorted(spread))
+        self.assertTrue(all(a < b for a, b in zip(spread, spread[1:])), spread)
 
 
 def _payload(n, **meta):
