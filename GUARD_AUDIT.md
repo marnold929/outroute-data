@@ -70,7 +70,13 @@ Not guarded but will degrade: superflex `sfa` comes from a 30-day 2QB window (24
 
 ## Judgment calls (reported, not changed)
 
-**J1: PPR pool drain (guards 2a and 3). This is the next freeze.**
+**J1: PPR pool drain (guards 2a and 3). DECIDED 2026-09-14: option (a), branch `frozen-market`.**
+- Frozen anchor: `pipeline/market_anchor/ppr_2026.json`, 263 players, rebuilt by `freeze_market.py` from the last build before the drain (b4ffa12, 2026-09-07 22:50Z; the pool sat at 263–271 from Aug 21 to Sep 7 and fell every day from Sep 8).
+- PPR is still fetched every build. A broken fetch (network/non-200, empty body, not JSON, not an FFC payload) aborts as an outage in every phase. A well-formed payload listing few or no players is the season: in season the frozen pool anchors `adp`/`ro` whenever live is smaller, and live takes over again once it's at least as large. Before kickoff the frozen pool is never used.
+- Guards 2a and 3 now ask "did we get a usable anchor, live or frozen?" and run on the chosen anchor. meta publishes `adp_anchor`, `adp_as_of`, `adp_pool`.
+- CI now runs the test suite before the build.
+
+Original analysis:
 - **What happens:** once the PPR pool is under 180, the draftable-ratio guard aborts every build. Under 100, the PPR floor does too. Neither recovers until FFC's pool grows back, which may never happen in-season. The guards aren't wrong about the data: a board whose top 200 is half sentinels *is* less market-anchored. The mistake is treating that as an upstream outage instead of the season.
 - **Options:**
   - (a) Carry the last good PPR pool forward as the in-season market anchor. Freeze `adp`, the anchor for `ro`, at the last build that passed. Keep the guards for real outages, like a non-200 response or an empty list mid-week.
