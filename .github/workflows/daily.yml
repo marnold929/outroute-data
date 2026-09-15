@@ -33,6 +33,11 @@ jobs:
         with:
           python-version: "3.12"
 
+      # The full test suite gates the build: a failing test fails the job
+      # before build.py runs, so nothing is committed or published.
+      - name: Run tests
+        run: python -m unittest discover -s pipeline -p 'test_*.py' -v
+
       - name: Build players.json
         env:
           # Optional — when this repo secret is set, the build adds AI one-line
