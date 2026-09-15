@@ -22,7 +22,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 SEASON_YEAR = 2026  # bump each season (also refresh pipeline/byes.json)
 MIN_PLAYERS = 150   # safety: never publish a suspiciously small file
 MIN_SCHEDULE_WEEKS = 17   # ESPN fetch degrades silently; never ship a gutted schedule
-MIN_ADP_ENTRIES = 100     # ppr/half/std rank sources must have real coverage
+MIN_ADP_ENTRIES = 100     # PPR floor all year; half/std floor before kickoff only (adp_source_guard)
 MIN_SLEEPER_MATCH = 0.60  # fraction of PPR players that must match a Sleeper record
 MIN_USAGE_RATIO = 0.60    # fraction of players with usage stats (76-78% in a healthy build)
 # Fraction of the top-DRAFTABLE_N board that must carry real (non-sentinel) ADP.
@@ -121,6 +121,54 @@ def drift_guard(players, trending, nudges, injuries_live):
     return movers, abort_hits, allowed, adp_rank, drift_reason
 
 
+def adp_source_guard(adp_ppr, adp_half, adp_std, in_season):
+    """The FFC source-coverage guard. Returns (abort, notes, adp_half, adp_std):
+    `abort` is the ABORT line to print before exiting (None to continue), `notes`
+    are log lines, and the half/std lists come back EMPTIED when that format's
+    ranks must not be published.
+
+    adp_ppr is the ONLY source that populates the emitted market `adp` (model.py)
+    and anchors every rank; a thin PPR feed silently drops the whole board onto
+    the add_adpless sentinel. Strict floor, all year.
+
+    Half and standard only feed `rh`/`rs`, which the app treats as optional
+    (Models.swift rank(in:) falls back to the PPR rank). Before kickoff a thin
+    pool there still means a broken upstream and aborts, as it always has. Once
+    the season starts, mock drafting stops and FFC's rolling 7-day pools drain at
+    different rates (half fastest), so thin is the normal state: warn, and let
+    the coverage rule decide whether the format's ranks are published at all.
+
+    The coverage rule (model.FORMAT_COVERAGE_MIN explains why) runs in every
+    phase: a half or standard pool that doesn't cover the PPR top of the board
+    publishes NO ranks for that format, so the app falls back to PPR for every
+    player rather than showing a board mixed from two scales.
+    """
+    notes = []
+    if len(adp_ppr) < MIN_ADP_ENTRIES:
+        return (f"ABORT: PPR ADP coverage too thin (ppr={len(adp_ppr)}, need {MIN_ADP_ENTRIES}); "
+                f"keeping previous file."), notes, adp_half, adp_std
+    thin = {name: len(src) for name, src in (("half", adp_half), ("std", adp_std))
+            if len(src) < MIN_ADP_ENTRIES}
+    if thin and not in_season:
+        return (f"ABORT: ADP coverage too thin (ppr={len(adp_ppr)}, "
+                f"half={len(adp_half)}, std={len(adp_std)}, need {MIN_ADP_ENTRIES} "
+                f"each before kickoff); keeping previous file."), notes, adp_half, adp_std
+    for name, n in thin.items():
+        notes.append(f"  WARN: {name} ADP pool thin in season ({n} < {MIN_ADP_ENTRIES}); not aborting")
+
+    kept = {}
+    for name, src in (("half", adp_half), ("std", adp_std)):
+        covered, top_n = model.format_coverage(adp_ppr, src)
+        if model.format_ranks_usable(adp_ppr, src):
+            notes.append(f"  {name} ranks: pool covers {covered}/{top_n} of the PPR top — published")
+            kept[name] = src
+        else:
+            notes.append(f"  WARN: {name} ranks dropped — pool covers {covered}/{top_n} of the PPR top "
+                         f"(need {model.FORMAT_COVERAGE_MIN:.0%}); app falls back to PPR order for every player")
+            kept[name] = []
+    return None, notes, kept["half"], kept["std"]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--fixtures", action="store_true", help="use offline fixtures")
@@ -149,14 +197,14 @@ def main():
             print(f"ABORT: schedule has only {len(schedule)} weeks "
                   f"(<{MIN_SCHEDULE_WEEKS}); ESPN fetch degraded — keeping previous file.")
             sys.exit(1)
-        # adp_ppr is the ONLY source that populates the emitted market `adp`
-        # (model.py); guard it alongside half/std, or a thin PPR feed silently
-        # drops the whole board onto the add_adpless sentinel.
-        if (len(adp_ppr) < MIN_ADP_ENTRIES or len(adp_half) < MIN_ADP_ENTRIES
-                or len(adp_std) < MIN_ADP_ENTRIES):
-            print(f"ABORT: ADP coverage too thin (ppr={len(adp_ppr)}, "
-                  f"half={len(adp_half)}, std={len(adp_std)}, need {MIN_ADP_ENTRIES} "
-                  f"each); keeping previous file.")
+        # adp_ppr anchors every rank; half/std are optional in the app. See
+        # adp_source_guard for what aborts, what warns, and what gets dropped.
+        abort, notes, adp_half, adp_std = adp_source_guard(
+            adp_ppr, adp_half, adp_std, in_season=model.injuries_move_rank())
+        for line in notes:
+            print(line)
+        if abort:
+            print(abort)
             sys.exit(1)
 
     # Weekly stats for BOTH seasons. The running season feeds the in-season block
