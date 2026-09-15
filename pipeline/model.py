@@ -79,6 +79,58 @@ OVERALL_TIER_MAX_COUNT = 15
 # top-ranked players are backed by real market ADP (not the add_adpless sentinel).
 DRAFTABLE_N = 200
 
+# Half-PPR / standard ranks (`rh` / `rs`) are published only when that format's
+# FFC pool covers at least FORMAT_COVERAGE_MIN of the PPR market's top
+# FORMAT_COVERAGE_TOP_N. Below that, the format's ranks are DROPPED for everyone,
+# not published for the players who happen to be in the pool.
+#
+# Why drop rather than publish the partial ordering. The app orders a half-PPR
+# board by `rh` and falls back to the PPR rank (`rk`) per player when `rh` is
+# absent (Models.swift rank(in:)). `rh` is a player's index within the format's
+# own pool, so it only lines up with `rk` when the pool holds everyone above him.
+# FFC's pools are a rolling 7-day window of mock drafts, and once drafting stops
+# they are not a thin top slice — they are a scattered sample: on 2026-09-14 the
+# 54-player half pool covered 39 of the top 100 and ran out to ADP 164. Every
+# ranked player's `rh` is compressed by the players missing above him (33 spots
+# on average, 119 at worst), so the partial board put Harrison Butker (ro 161)
+# at #78 and Jordan Love (ro 149) at #71, above Lamar Jackson (ro 57), who
+# dropped to #80 on the fallback. That board is neither half-PPR nor PPR, and
+# nothing on it tells the user which. Dropping the format entirely makes every
+# player fall back to the PPR order — a known, consistent approximation the app
+# already handles, and one the detail sheet shows honestly as "—".
+#
+# 90% of the top 100 bounds that compression at about ten spots near the bottom
+# of the range users actually consult. Healthy preseason pools covered 100/100;
+# the last builds before the freeze covered 96 (half) and 85 (standard), which
+# already put Trey McBride (ro 36) at #61 on the standard board.
+FORMAT_COVERAGE_TOP_N = 100
+FORMAT_COVERAGE_MIN = 0.90
+_FFC_POS = {"QB", "RB", "WR", "TE", "K", "DST"}
+
+
+def format_coverage(adp_ppr, adp_fmt, top_n=FORMAT_COVERAGE_TOP_N):
+    """(covered, n): how many of the PPR market's top `top_n` by ADP appear in
+    another format's FFC pool, matched on the same name|POS key assemble uses."""
+    def key(e):
+        pos = canon_pos(e.get("position", ""))
+        return norm(e.get("name", "")) + "|" + pos if pos in _FFC_POS and e.get("name") else None
+
+    top = []
+    for e in sorted(adp_ppr or [], key=lambda x: x.get("adp", 999)):
+        k = key(e)
+        if k and k not in top:
+            top.append(k)
+        if len(top) == top_n:
+            break
+    fmt_keys = {k for k in map(key, adp_fmt or []) if k}
+    return sum(1 for k in top if k in fmt_keys), len(top)
+
+
+def format_ranks_usable(adp_ppr, adp_fmt, top_n=FORMAT_COVERAGE_TOP_N, minimum=FORMAT_COVERAGE_MIN):
+    """True when `adp_fmt` covers enough of the PPR top to publish its ranks at all."""
+    covered, n = format_coverage(adp_ppr, adp_fmt, top_n)
+    return n > 0 and covered / n >= minimum
+
 
 def assign_tiers(scores, k, min_size, max_size, max_count, adps=None, max_adp_span=None):
     """Given per-player scores in ascending (best-first) order, return a tier
