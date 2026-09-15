@@ -218,6 +218,11 @@ def production_slots(players: list[dict], agg: dict, weeks_complete: int,
     """
     floor = min_games_for(weeks_complete)
     slots = {p["id"]: float(p["ro"]) for p in players}
+    if max(0, int(weeks_complete or 0)) == 0:
+        # No completed week, nothing to rank: every slot is ro. The blend was
+        # already safe here (zero weight, zero travel), but sr/srh/srs read the
+        # slots raw and must equal ro too, whatever the caller passes as agg.
+        return slots
     for pos in POSITIONS:
         played = [p for p in players
                   if p["p"] == pos
