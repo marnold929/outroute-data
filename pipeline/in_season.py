@@ -1,14 +1,26 @@
-"""In-season overall rank (`isr`) + the published weekly scoring block.
+"""In-season overall ranks + the published weekly scoring block.
 
 STRICTLY ADDITIVE. Nothing here writes `ro`, `rk`, `adp`, `os` or any other
 existing field — guard #10 compares published `ro` against raw-ADP rank, so
 reordering `ro` by production would read as enormous unexplained drift and
-abort every build. The in-season view ships as a NEW field instead, and the
-app is free to ignore it.
+abort every build. The in-season views ship as NEW fields instead, and the
+app is free to ignore them.
 
-What gets published per player (all optional, all omitted when unknown):
+Two boards, three scoring formats each. All six are always present, each a
+dense 1..N ranking of the whole board, and at ZERO completed weeks all six
+equal `ro` exactly.
 
-    isr   in-season overall rank — the blend described below. Always present.
+    isr   projected rest-of-season rank, PPR       — the draft market bent
+    ish   projected rest-of-season rank, half-PPR    toward production as
+    iss   projected rest-of-season rank, standard    evidence accumulates
+          (weighted, travel-capped blend; see WEIGHTING). isr is the default.
+
+    sr    season-to-date rank, PPR                 — what has actually
+    srh   season-to-date rank, half-PPR              happened: production
+    srs   season-to-date rank, standard              order within position on
+          the market's slots, no weight, no blend, no cap.
+
+The weekly block (optional, omitted when the player has no games):
     wg    games played in COMPLETED weeks
     wpg   PPR points per game, whole number
     whg   half-PPR points per game, whole number
