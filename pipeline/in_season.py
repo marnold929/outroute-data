@@ -188,8 +188,11 @@ def min_games_for(weeks_complete: int) -> int:
     return max(1, math.ceil(PROD_MIN_GAMES_SHARE * n))
 
 
-def production_slots(players: list[dict], agg: dict, weeks_complete: int) -> dict[str, float]:
-    """Each player's production rank ON THE OVERALL SCALE, as id -> rank.
+def production_slots(players: list[dict], agg: dict, weeks_complete: int,
+                     fmt: str = "ppr") -> dict[str, float]:
+    """Each player's production rank ON THE OVERALL SCALE, as id -> rank, with
+    players ordered by points per game in scoring format `fmt` ("ppr", "half"
+    or "std" — the aggregate's keys).
 
     Ranking by raw points across positions would be meaningless — every QB
     outscores every RB — so production is ranked WITHIN a position, and those
@@ -212,10 +215,17 @@ def production_slots(players: list[dict], agg: dict, weeks_complete: int) -> dic
         # The market's overall ranks for this position, handed back out in
         # production order (best PPG first; ties keep market order).
         market_slots = sorted(p["ro"] for p in played)
-        by_production = sorted(played, key=lambda p: (-per_game(agg[p["sid"]], "ppr"), p["ro"]))
+        by_production = sorted(played, key=lambda p: (-per_game(agg[p["sid"]], fmt), p["ro"]))
         for slot, p in zip(market_slots, by_production):
             slots[p["id"]] = float(slot)
     return slots
+
+
+def _publish_rank(players: list[dict], value: dict[str, float], field: str) -> None:
+    """Number players 1..N into `field` by (value, ro): ro breaks ties, so a
+    board where every value equals ro reproduces ro exactly."""
+    for i, p in enumerate(sorted(players, key=lambda p: (value[p["id"]], p["ro"]))):
+        p[field] = i + 1
 
 
 def attach_in_season(players: list[dict], agg: dict, last_week_points: dict,
@@ -246,6 +256,14 @@ def attach_in_season(players: list[dict], agg: dict, last_week_points: dict,
         if last is not None:
             p["wlp"], p["wlh"], p["wls"] = (round(v, 1) for v in last)
         filled += 1
+
+    # Season-to-date boards: the UNCLAMPED production slots, ranked as they
+    # are — no weight, no blend, no travel cap. A player below the games floor
+    # (PROD_MIN_GAMES_SHARE) or with no games keeps his own ro as his slot:
+    # we cannot rank him on production yet, and his market rank is the honest
+    # placeholder, not a guess at points he hasn't scored.
+    for field, fmt in (("sr", "ppr"), ("srh", "half"), ("srs", "std")):
+        _publish_rank(players, production_slots(players, agg, weeks_complete, fmt), field)
 
     slots = production_slots(players, agg, weeks_complete)
     blended = {}
