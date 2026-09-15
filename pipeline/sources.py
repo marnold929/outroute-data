@@ -43,6 +43,78 @@ def fetch_trending(fixtures: bool = False) -> list:
         return []
 
 
+class SourceOutage(Exception):
+    """The fetch itself broke: no usable answer came back from the upstream."""
+
+
+def check_adp_payload(data, label: str) -> dict:
+    """An FFC ADP payload, or SourceOutage when it isn't one.
+
+    The line between an OUTAGE and the SEASON is drawn here. FFC answers a
+    healthy request with {"status": "Success", "meta": {...}, "players": [...]}.
+    Once mock drafting stops, that same well-formed answer simply lists fewer
+    players — down to an empty list, since a player needs 5+ drafts in the
+    rolling window to be listed. That is the season, and it is not an error.
+    Anything that is NOT that shape — an error status, no players list, entries
+    without a name or a numeric adp — means the fetch broke, and is an outage.
+    """
+    if not isinstance(data, dict):
+        raise SourceOutage(f"FFC {label}: payload is {type(data).__name__}, not an object")
+    if data.get("status") != "Success":
+        raise SourceOutage(f"FFC {label}: status {data.get('status')!r}, not 'Success'")
+    players = data.get("players")
+    if not isinstance(players, list):
+        raise SourceOutage(f"FFC {label}: no players list in the payload")
+    bad = sum(1 for e in players
+              if not isinstance(e, dict) or not e.get("name") or not e.get("position")
+              or isinstance(e.get("adp"), bool) or not isinstance(e.get("adp"), (int, float)))
+    if bad:
+        raise SourceOutage(f"FFC {label}: {bad}/{len(players)} entries malformed (name/position/adp)")
+    return data
+
+
+def fetch_adp_payload(fmt_key: str, year: int, teams: int = 12, fixtures: bool = False) -> dict:
+    """The whole validated FFC payload (meta included) for one format. Raises
+    SourceOutage on a genuine fetch failure: a network error or non-200, an
+    empty body, a body that isn't JSON, or JSON that isn't an FFC payload (see
+    check_adp_payload). A well-formed payload with a short or empty players
+    list is returned as-is — that is the season, and the caller decides."""
+    if fixtures:
+        return check_adp_payload(json.loads((ROOT / "fixtures" / f"ffc_{fmt_key}.json").read_text()), fmt_key)
+    url = FFC_ADP_URL.format(fmt=FFC_FORMATS[fmt_key], teams=teams, year=year)
+    try:
+        req = urllib.request.Request(url, headers=UA)
+        with urllib.request.urlopen(req, timeout=60) as resp:   # non-2xx raises HTTPError
+            status, body = resp.status, resp.read()
+    except Exception as exc:
+        raise SourceOutage(f"FFC {fmt_key}: fetch failed ({type(exc).__name__}: {exc})") from exc
+    if status != 200:
+        raise SourceOutage(f"FFC {fmt_key}: HTTP {status}")
+    if not body.strip():
+        raise SourceOutage(f"FFC {fmt_key}: empty response body")
+    try:
+        data = json.loads(body.decode())
+    except ValueError as exc:
+        raise SourceOutage(f"FFC {fmt_key}: response is not JSON ({exc})") from exc
+    return check_adp_payload(data, fmt_key)
+
+
+FROZEN_ANCHOR_DIR = ROOT / "pipeline" / "market_anchor"
+
+
+def load_frozen_anchor(fmt_key: str, season: int) -> dict | None:
+    """The committed frozen market pool for this format and season
+    (freeze_market.py), or None when there isn't one. A file that exists but
+    doesn't validate is a broken commit, not a missing anchor: it raises."""
+    path = FROZEN_ANCHOR_DIR / f"{fmt_key}_{season}.json"
+    if not path.exists():
+        return None
+    data = check_adp_payload(json.loads(path.read_text()), f"frozen {path.name}")
+    if data.get("meta", {}).get("season") != season or not data["meta"].get("as_of"):
+        raise ValueError(f"{path.name}: meta must carry season {season} and as_of")
+    return data
+
+
 def fetch_adp(fmt_key: str, year: int, teams: int = 12, fixtures: bool = False) -> list:
     """Returns FFC ADP entries: [{name, position, team, adp, bye?}, ...]"""
     if fixtures:

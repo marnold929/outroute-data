@@ -22,14 +22,16 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 SEASON_YEAR = 2026  # bump each season (also refresh pipeline/byes.json)
 MIN_PLAYERS = 150   # safety: never publish a suspiciously small file
 MIN_SCHEDULE_WEEKS = 17   # ESPN fetch degrades silently; never ship a gutted schedule
-MIN_ADP_ENTRIES = 100     # PPR floor all year; half/std floor before kickoff only (adp_source_guard)
+MIN_ADP_ENTRIES = 100     # PPR anchor floor all year; half/std floor before kickoff only (adp_source_guard)
 MIN_SLEEPER_MATCH = 0.60  # fraction of PPR players that must match a Sleeper record
 MIN_USAGE_RATIO = 0.60    # fraction of players with usage stats (76-78% in a healthy build)
-# Fraction of the top-DRAFTABLE_N board that must carry real (non-sentinel) ADP.
-# A ratio, not an absolute count: FFC's pool size drifts through the offseason
-# and the Sleeper union pads totals, so any fixed count is too loose in August or
-# a false alarm in June. This asserts the property we care about — a market-driven
-# draftable board. Today's live feed runs ~98% (196/200).
+# Guard 3: fraction of the top-DRAFTABLE_N board that must carry real
+# (non-sentinel) ADP from the market anchor. It used to ask "is the live market
+# rich?", which the season answers "no" from mid-September on. Since the anchor
+# is chosen first (select_ppr_anchor: live, or the frozen pool once the season
+# has drained live), it now asks "did we get a usable anchor?". The frozen 2026
+# anchor fills 200/200 on its own, so in season this fires only when the anchor
+# itself is broken; before kickoff, a live pool this thin is still an outage.
 MIN_DRAFTABLE_ADP_RATIO = 0.90
 
 # Full-pool data-quality guards (v1.3): the union with Sleeper must deliver a
@@ -121,15 +123,54 @@ def drift_guard(players, trending, nudges, injuries_live):
     return movers, abort_hits, allowed, adp_rank, drift_reason
 
 
+def select_ppr_anchor(live, frozen, in_season):
+    """Guard 2a, first half: choose the PPR market anchor. Returns
+    (entries, info, notes), where `info` is what meta publishes about it.
+
+    Both inputs are VALIDATED FFC payloads (sources.check_adp_payload): by the
+    time we get here a broken fetch has already aborted as an outage, so a short
+    live list is the season, not a failure.
+
+    FFC's pool is a rolling 7-day window of mock drafts. Once the season starts
+    nobody drafts, and the pool drains (271 on Aug 30, 194 on Sep 14). The
+    frozen anchor (pipeline/market_anchor/, freeze_market.py) is the last healthy
+    pool before that drain. In season, whichever of live and frozen is healthier
+    — more players listed, live winning ties — anchors `adp` and so `ro`. If FFC
+    revives and its pool outgrows the frozen one, live takes over again.
+
+    Before kickoff the frozen pool is never used: a thin live pool in August is
+    a broken upstream, and the floor in adp_source_guard aborts on it.
+    """
+    live_n = len(live["players"])
+    live_info = {"adp_anchor": "live", "adp_as_of": (live.get("meta") or {}).get("end_date")
+                 or datetime.date.today().isoformat(), "adp_pool": live_n}
+    if not in_season:
+        return live["players"], live_info, [f"  PPR anchor: live ({live_n} players; preseason, frozen anchor not used)"]
+    if frozen is None:
+        return live["players"], live_info, [f"  WARN: PPR anchor: live ({live_n} players); "
+                                            f"no frozen anchor for {SEASON_YEAR} committed"]
+    frozen_n, as_of = len(frozen["players"]), frozen["meta"]["as_of"]
+    if live_n >= frozen_n:
+        return live["players"], live_info, [f"  PPR anchor: live ({live_n} players) — at least as healthy as "
+                                            f"the frozen pool ({frozen_n}, {as_of})"]
+    info = {"adp_anchor": "frozen", "adp_as_of": as_of, "adp_pool": frozen_n}
+    return frozen["players"], info, [f"  PPR anchor: frozen {as_of} ({frozen_n} players); live pool has "
+                                     f"{live_n} — drained by the season, not a fetch failure"]
+
+
 def adp_source_guard(adp_ppr, adp_half, adp_std, in_season):
     """The FFC source-coverage guard. Returns (abort, notes, adp_half, adp_std):
     `abort` is the ABORT line to print before exiting (None to continue), `notes`
     are log lines, and the half/std lists come back EMPTIED when that format's
     ranks must not be published.
 
-    adp_ppr is the ONLY source that populates the emitted market `adp` (model.py)
-    and anchors every rank; a thin PPR feed silently drops the whole board onto
-    the add_adpless sentinel. Strict floor, all year.
+    adp_ppr is the PPR market ANCHOR chosen by select_ppr_anchor (live, or
+    frozen in season), and the ONLY source that populates the emitted market
+    `adp` (model.py) and anchors every rank; a thin anchor silently drops the
+    whole board onto the add_adpless sentinel. Guard 2a no longer asks whether
+    the live market is rich — it asks whether we got a usable anchor at all.
+    Strict floor, all year. In season a drained live pool can't reach this
+    (the frozen anchor replaced it), so firing means the anchor itself is broken.
 
     Half and standard only feed `rh`/`rs`, which the app treats as optional
     (Models.swift rank(in:) falls back to the PPR rank). Before kickoff a thin
@@ -145,7 +186,7 @@ def adp_source_guard(adp_ppr, adp_half, adp_std, in_season):
     """
     notes = []
     if len(adp_ppr) < MIN_ADP_ENTRIES:
-        return (f"ABORT: PPR ADP coverage too thin (ppr={len(adp_ppr)}, need {MIN_ADP_ENTRIES}); "
+        return (f"ABORT: no usable PPR market anchor (anchor={len(adp_ppr)} players, need {MIN_ADP_ENTRIES}); "
                 f"keeping previous file."), notes, adp_half, adp_std
     thin = {name: len(src) for name, src in (("half", adp_half), ("std", adp_std))
             if len(src) < MIN_ADP_ENTRIES}
@@ -178,7 +219,20 @@ def main():
     print("Fetching sources…")
     sleeper = sources.fetch_sleeper_players(fixtures=args.fixtures)
     trending = sources.fetch_trending(fixtures=args.fixtures)
-    adp_ppr = sources.fetch_adp("ppr", SEASON_YEAR, fixtures=args.fixtures)
+    # PPR is fetched every build, in every phase, so a revived FFC is noticed.
+    # OUTAGE vs SEASON: a fetch that breaks (network error, non-200, empty body,
+    # not JSON, not an FFC payload) raises SourceOutage and aborts right here —
+    # frozen anchor or not, a broken upstream must be seen. A well-formed payload
+    # listing few or no players is the season draining the pool, and goes on to
+    # select_ppr_anchor.
+    try:
+        ppr_live = sources.fetch_adp_payload("ppr", SEASON_YEAR, fixtures=args.fixtures)
+    except sources.SourceOutage as exc:
+        print(f"ABORT: PPR ADP fetch failed — upstream outage, not the season ({exc}); keeping previous file.")
+        sys.exit(1)
+    ppr_frozen = None if args.fixtures else sources.load_frozen_anchor("ppr", SEASON_YEAR)
+    adp_ppr, anchor_info, anchor_notes = select_ppr_anchor(
+        ppr_live, ppr_frozen, in_season=not args.fixtures and model.injuries_move_rank())
     adp_half = sources.fetch_adp("half", SEASON_YEAR, fixtures=args.fixtures)
     adp_std = sources.fetch_adp("standard", SEASON_YEAR, fixtures=args.fixtures)
     # Real superflex market ADP (FFC's 2qb format) — QBs are worth 20+ picks more
@@ -187,8 +241,10 @@ def main():
     byes = sources.load_byes()
     overrides = sources.load_overrides()
     schedule = sources.fetch_schedule(SEASON_YEAR, fixtures=args.fixtures)
-    print(f"  sleeper={len(sleeper)} adp_ppr={len(adp_ppr)} half={len(adp_half)} "
+    print(f"  sleeper={len(sleeper)} adp_ppr={len(adp_ppr)} (live {len(ppr_live['players'])}) half={len(adp_half)} "
           f"std={len(adp_std)} sfx={len(adp_sfx)} trending={len(trending)} schedule_weeks={len(schedule)}")
+    for line in anchor_notes:
+        print(line)
 
     # Source-coverage guards (mirror MIN_PLAYERS): a degraded upstream must
     # abort and keep the previous published file, never ship silently gutted data.
@@ -197,8 +253,8 @@ def main():
             print(f"ABORT: schedule has only {len(schedule)} weeks "
                   f"(<{MIN_SCHEDULE_WEEKS}); ESPN fetch degraded — keeping previous file.")
             sys.exit(1)
-        # adp_ppr anchors every rank; half/std are optional in the app. See
-        # adp_source_guard for what aborts, what warns, and what gets dropped.
+        # adp_ppr (the chosen anchor) anchors every rank; half/std are optional
+        # in the app. See adp_source_guard for what aborts, warns, and is dropped.
         abort, notes, adp_half, adp_std = adp_source_guard(
             adp_ppr, adp_half, adp_std, in_season=model.injuries_move_rank())
         for line in notes:
@@ -228,19 +284,21 @@ def main():
 
     players, adp_stat = model.assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, adp_sfx=adp_sfx)
 
-    # Draftable-range ADP ratio guard — the layer that actually matters. Even
-    # when adp_ppr passes the source-count check above, a degraded PPR feed can
-    # still leave most of the *draftable* board on the sentinel. Abort unless the
-    # top-N board is overwhelmingly backed by real market ADP (based on model's
-    # _adpless flag, not an adp==ro heuristic).
+    # Guard 3 — is the chosen anchor usable across the draftable range? Even an
+    # anchor past the count floor above can leave most of the top-N board on the
+    # sentinel (few valid positions, duplicates, exclusions). Abort unless the
+    # top-N board is overwhelmingly backed by real anchor ADP (based on model's
+    # _adpless flag, not an adp==ro heuristic). A SEASON-drained live pool no
+    # longer reaches here in season (select_ppr_anchor swapped in the frozen
+    # pool); what trips it is a broken anchor, or before kickoff a broken feed.
     dn = adp_stat["draftable_n"]
     real = adp_stat["draftable_real_adp"]
     ratio = real / dn if dn else 0.0
-    print(f"  draftable ADP coverage: {real}/{dn} = {ratio:.0%} real "
-          f"(need {MIN_DRAFTABLE_ADP_RATIO:.0%})")
+    print(f"  draftable ADP coverage: {real}/{dn} = {ratio:.0%} real from the "
+          f"{anchor_info['adp_anchor']} anchor (need {MIN_DRAFTABLE_ADP_RATIO:.0%})")
     if not args.fixtures and ratio < MIN_DRAFTABLE_ADP_RATIO:
-        print(f"ABORT: ADP coverage too thin in draftable range "
-              f"({real}/{dn} = {ratio:.0%} real, need {MIN_DRAFTABLE_ADP_RATIO:.0%}); "
+        print(f"ABORT: {anchor_info['adp_anchor']} PPR anchor ({anchor_info['adp_as_of']}) unusable in the "
+              f"draftable range ({real}/{dn} = {ratio:.0%} real, need {MIN_DRAFTABLE_ADP_RATIO:.0%}); "
               f"keeping previous file.")
         sys.exit(1)
 
@@ -478,9 +536,17 @@ def main():
             "weeks_complete": n_complete,
             "last_week": last_week,
             "prod_weight": round(prod_weight, 3),
+            # Additive: where `adp` (and so `ro`) comes from. "frozen" means the
+            # market as drafted up to adp_as_of, not today's market — the app
+            # can say "drafted around here in August" rather than imply current.
+            "adp_anchor": anchor_info["adp_anchor"],
+            "adp_as_of": anchor_info["adp_as_of"],
+            "adp_pool": anchor_info["adp_pool"],
             "sources": [
                 "OutRoute ranking model v1",
-                "Market ADP: Fantasy Football Calculator (live mock drafts)",
+                ("Market ADP: Fantasy Football Calculator (live mock drafts)"
+                 if anchor_info["adp_anchor"] == "live" else
+                 f"Market ADP: Fantasy Football Calculator (mock drafts, frozen as of {anchor_info['adp_as_of']})"),
                 "Rosters/injuries/trending: Sleeper API",
                 "Manual research overrides",
             ],

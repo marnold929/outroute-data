@@ -87,13 +87,13 @@ class RealInSeasonPools(unittest.TestCase):
 
 
 class AdpSourceGuard(unittest.TestCase):
-    def test_thin_ppr_aborts_in_season(self):
+    def test_thin_anchor_aborts_in_season(self):
         abort, *_ = build.adp_source_guard(_pool(99), _pool(200), _pool(200), in_season=True)
-        self.assertTrue(abort.startswith("ABORT: PPR ADP coverage too thin"))
+        self.assertTrue(abort.startswith("ABORT: no usable PPR market anchor"))
 
-    def test_thin_ppr_aborts_before_kickoff(self):
+    def test_thin_anchor_aborts_before_kickoff(self):
         abort, *_ = build.adp_source_guard(_pool(99), _pool(200), _pool(200), in_season=False)
-        self.assertTrue(abort.startswith("ABORT: PPR ADP coverage too thin"))
+        self.assertTrue(abort.startswith("ABORT: no usable PPR market anchor"))
 
     def test_healthy_pools_publish_both_formats(self):
         ppr, half, std = _pool(250), _pool(230), _pool(220)
