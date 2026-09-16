@@ -218,11 +218,13 @@ class TravelCap(unittest.TestCase):
         w = in_season.production_weight(1)
         blended = (1 - w) * star["ro"] + w * slot
         self.assertAlmostEqual(blended, 43.6)              # the blend, on the raw slot
-        self.assertEqual(in_season.clamp_travel(blended, star["ro"], 1), 29.0)
+        # ro 4: the floor gives him 10 spots a week, not 0.8.
+        self.assertEqual(in_season.max_travel(star["ro"], 1), 10.0)
+        self.assertEqual(in_season.clamp_travel(blended, star["ro"], 1), 14.0)
         # The cap bounds the value, not the rank: he lands near the edge of the
         # band, a few spots either side as everyone around him shifts too.
-        self.assertLessEqual(star["isr"] - star["ro"], 30)
-        self.assertGreater(star["isr"] - star["ro"], 20)
+        self.assertLessEqual(star["isr"] - star["ro"], 15)
+        self.assertGreater(star["isr"] - star["ro"], 5)
 
     def test_the_blend_itself_is_undamped(self):
         # No second damper: with the cap effectively off, the rank is the rank
@@ -239,13 +241,63 @@ class TravelCap(unittest.TestCase):
     def test_cap_widens_with_weeks(self):
         _, _, one, _ = self._board(1)
         _, _, four, _ = self._board(4)
-        self.assertEqual(in_season.clamp_travel(400.0, 4, 4), 104.0)
+        self.assertEqual(in_season.clamp_travel(400.0, 4, 4), 44.0)      # 4 weeks x the 10-spot floor
         self.assertGreater(four["isr"] - four["ro"], one["isr"] - one["ro"])
 
     def test_cap_is_symmetric(self):
-        self.assertEqual(in_season.clamp_travel(1.0, 300, 1), 275.0)
+        self.assertEqual(in_season.clamp_travel(1.0, 300, 1), 240.0)     # ro 300: 60 spots a week
         self.assertEqual(in_season.clamp_travel(1.0, 300, 0), 300.0)
         self.assertEqual(in_season.clamp_travel(310.0, 300, 1), 310.0)   # inside the band: untouched
+
+
+class TravelBandShape(unittest.TestCase):
+    """max_travel(ro, n) = n * max(floor, fraction * ro) — a ramp, not tiers."""
+
+    def test_the_landmarks(self):
+        self.assertEqual(in_season.max_travel(50, 1), 10.0)     # the floor still binds
+        self.assertEqual(in_season.max_travel(100, 1), 20.0)
+        self.assertEqual(in_season.max_travel(375, 1), 75.0)
+
+    def test_zero_weeks_is_zero_travel_at_every_rank(self):
+        for ro in (1, 50, 200, 600):
+            self.assertEqual(in_season.max_travel(ro, 0), 0.0, ro)
+
+    def test_continuous_in_ro(self):
+        # No cliff anywhere: adjacent draft ranks get bands a fraction apart,
+        # so nobody can be told "you moved because you were drafted one later".
+        for ro in range(1, 600):
+            step = in_season.max_travel(ro + 1, 4) - in_season.max_travel(ro, 4)
+            self.assertLessEqual(step, 4 * in_season.ISR_TRAVEL_RANK_FRACTION + 1e-9, ro)
+
+    def test_non_decreasing_in_ro_and_in_weeks(self):
+        for n in (0, 1, 4, 10):
+            bands = [in_season.max_travel(ro, n) for ro in range(1, 600)]
+            self.assertEqual(bands, sorted(bands), n)
+        for ro in (1, 50, 375):
+            byweek = [in_season.max_travel(ro, n) for n in range(0, 19)]
+            self.assertEqual(byweek, sorted(byweek), ro)
+
+    def test_the_floor_protects_the_very_top(self):
+        # Without the floor ro 4 would get 0.8 spots a week and never move.
+        self.assertEqual(in_season.max_travel(4, 1), in_season.ISR_TRAVEL_PER_WEEK)
+
+    def test_season_to_date_ignores_the_band_entirely(self):
+        # sr/srh/srs must not change when the travel constants change.
+        def boards(per_week, fraction):
+            players = _players(40)
+            # Production inverted against the market, so the band has something
+            # to bind on: the last player on the board is the best producer.
+            agg = _fmt_agg({p["sid"]: (float(p["ro"]), float(p["ro"]), 40.0 - p["ro"])
+                            for p in players}, games=4)
+            with mock.patch.object(in_season, "ISR_TRAVEL_PER_WEEK", per_week), \
+                    mock.patch.object(in_season, "ISR_TRAVEL_RANK_FRACTION", fraction):
+                in_season.attach_in_season(players, agg, {}, weeks_complete=4)
+            return {p["n"]: tuple(p[f] for f in ("sr", "srh", "srs")) for p in players}, \
+                   {p["n"]: p["isr"] for p in players}
+        tight_sr, tight_isr = boards(1.0, 0.0)
+        wide_sr, wide_isr = boards(10_000.0, 10.0)
+        self.assertEqual(tight_sr, wide_sr)
+        self.assertNotEqual(tight_isr, wide_isr)   # the projected board does change
 
 
 class BelowTheFloorOnAllBoards(unittest.TestCase):

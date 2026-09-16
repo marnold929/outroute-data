@@ -112,15 +112,15 @@ except ImportError:           # run as a script (build.py puts pipeline/ on sys.
 # slot is from his production. It does not rescue a player who has played and
 # not produced — Loveland (3 of 4, 2.4 PPG) still falls, by less.
 #
-# ISR_TRAVEL_PER_WEEK = 25.0 — the band the projected rank may travel from the
-# draft rank, per completed week. It is applied to the OUTPUT of the blend:
+# ISR_TRAVEL_PER_WEEK / ISR_TRAVEL_RANK_FRACTION — the band the projected rank
+# may travel from the draft rank. Applied to the OUTPUT of the blend:
 #
 #     blended = (1 - w) * ro + w * slot        # the slot is never clamped
-#     max_travel(n) = ISR_TRAVEL_PER_WEEK * n
-#     blended is clamped into [ro - max_travel(n), ro + max_travel(n)]
+#     max_travel(ro, n) = n * max(ISR_TRAVEL_PER_WEEK, ISR_TRAVEL_RANK_FRACTION * ro)
+#     blended is clamped into [ro - max_travel, ro + max_travel]
 #
 # Read it as: after n completed weeks, a player's projected rank sits within
-# ISR_TRAVEL_PER_WEEK * n spots of where he was drafted.
+# max_travel spots of where he was drafted.
 #
 # Why the output and not the slot. production_slots hands a player the market
 # slot of his production rank within his position, and after one week that is
@@ -131,6 +131,39 @@ except ImportError:           # run as a script (build.py puts pipeline/ on sys.
 # weight decides how much to trust production; this decides how far the result
 # may end up from the draft board, which is the thing a reader notices.
 #
+# Why the band scales with rank. Draft capital is information, and there is far
+# more of it at the top of the board than at the bottom. The gap between the
+# market's WR3 and its WR8 is thousands of drafters disagreeing by a handful of
+# picks; the gap between WR70 and WR90 is nearly noise. A flat number of spots
+# has to serve both and serves neither: small enough to keep a first-rounder
+# from swinging on one Sunday, it pins the whole tail in place; large enough to
+# let the tail move, it lets the first-rounder swing.
+#
+# Why a ramp and not tiers. Bracketing (say 25 spots inside the top 50, 50
+# outside it) puts a cliff in the middle of the board: ro 51 could travel twice
+# as far as ro 49 on identical production, and no user could ever be told why.
+# A ramp has no edge to trip over — two players drafted a pick apart get bands a
+# pick apart.
+#
+# The landmarks these constants were chosen against, per completed week:
+#
+#     ro  50 ->  10 spots      (the floor still binds here)
+#     ro 100 ->  20 spots
+#     ro 375 ->  75 spots
+#
+# The floor matters at the very top: without it ro 4 would get 0.8 spots a week
+# and never move at all. With it, an early-round bust travels 10 spots a week —
+# visible by week 1, out of the round by week 3 — while a ro 375 flier can climb
+# 75 a week, which is what it takes to notice a waiver-wire breakout at all.
+#
+# The asymmetry, carried over from the move to the output: a player's blend
+# travels w * (sr - ro), so the distance scales with how far his production
+# rank sits from his draft rank. High draft capital plus bad production is a
+# huge (sr - ro) against a small band, so the cap bites hard; a late-round
+# climber has a large band and a blend that rarely reaches it, so the cap
+# barely touches him. That is intended: the claim "he was drafted 4th" is worth
+# defending against one bad game, and "he was drafted 375th" is not.
+#
 # Two honest caveats:
 #   * It bounds the blended VALUE, not the final rank. Ranks come from sorting
 #     those values, and everyone around a player moves too, so a capped player
@@ -139,23 +172,14 @@ except ImportError:           # run as a script (build.py puts pipeline/ on sys.
 #     change at w = 0.10, three spots of value) is nowhere near the band and
 #     passes through untouched.
 #
-# Why 25: at one completed week it holds a collapse or a breakout to about a
-# round and a half of the draft board, and it widens linearly — 100 spots by
-# week 4, 200 by week 8, where it stops binding anywhere in the usable part of
-# the board. Symmetric, so a breakout at ro 300 does not reach the top 10 on
-# one game either. Zero weeks means zero travel, so isr == ro at week 0 holds
-# by construction as well as by weight.
-#
-# The case that set it, the live board after 2026 week 1 (w = 0.10):
-#
-#     Ja'Marr Chase  ro 4,  3.2 pts: slot 241 -> blended 27.7 -> capped 29.0
-#     Drake London   ro 14, 5.5 pts: slot 177 -> blended 30.3 -> capped 30.3
-#                                    (inside the band: untouched)
+# Zero weeks means zero travel, so isr == ro at week 0 holds by construction as
+# well as by weight.
 PROD_WEIGHT_HALF = 9.0
 PROD_WEIGHT_MAX = 0.60
 PROD_MIN_GAMES_SHARE = 0.5
 PROD_GAMES_EXPONENT = 2.0
-ISR_TRAVEL_PER_WEEK = 25.0
+ISR_TRAVEL_PER_WEEK = 10.0        # floor, in spots per completed week
+ISR_TRAVEL_RANK_FRACTION = 0.20   # of the player's own ro, per completed week
 
 # Positions the production rank is computed within (see production_slots).
 POSITIONS = ("QB", "RB", "WR", "TE", "K", "DST")
@@ -173,15 +197,18 @@ def production_weight(weeks_complete: int) -> float:
     return min(PROD_WEIGHT_MAX, n / (n + PROD_WEIGHT_HALF))
 
 
-def max_travel(weeks_complete: int) -> float:
-    """How far a projected rank may travel from ro (see ISR_TRAVEL_PER_WEEK).
-    Exactly 0.0 at zero completed weeks."""
-    return ISR_TRAVEL_PER_WEEK * max(0, int(weeks_complete or 0))
+def max_travel(ro: float, weeks_complete: int) -> float:
+    """How far a projected rank may travel from `ro` after `weeks_complete`
+    weeks: the per-week band (a floor, or a fraction of his own draft rank,
+    whichever is larger) times the weeks. Exactly 0.0 at zero completed weeks,
+    continuous and non-decreasing in both arguments. See the block above."""
+    per_week = max(ISR_TRAVEL_PER_WEEK, ISR_TRAVEL_RANK_FRACTION * max(0.0, float(ro)))
+    return per_week * max(0, int(weeks_complete or 0))
 
 
 def clamp_travel(blended: float, ro: float, weeks_complete: int) -> float:
     """A blended value clamped into [ro - max_travel, ro + max_travel]."""
-    reach = max_travel(weeks_complete)
+    reach = max_travel(ro, weeks_complete)
     return min(ro + reach, max(ro - reach, blended))
 
 
