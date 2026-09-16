@@ -338,10 +338,11 @@ def main():
     print(f"  in-season: {n_complete} completed week(s) of {SEASON_YEAR} "
           f"(complete: {sorted(completed_weeks) or '-'}), "
           f"full-attendance production weight {prod_weight:.2f}")
-    moved = sum(1 for p in players if p["isr"] != p["ro"])
-    print(f"  in-season rank: weekly block on {ws_filled}/{len(players)} players, "
-          f"{moved} differ from ro"
-          + ("" if n_complete else "  (zero completed weeks — isr == ro by construction)"))
+    moved_isr = sum(1 for p in players if p["isr"] != p["ro"])
+    moved_sr = sum(1 for p in players if p["sr"] != p["ro"])
+    print(f"  in-season rank: weekly block on {ws_filled}/{len(players)} players; "
+          f"isr (projected) differs from ro on {moved_isr}, sr (season-to-date) on {moved_sr}"
+          + ("" if n_complete else "  (zero completed weeks — isr == sr == ro by construction)"))
 
     # Volume-stat spot checks. WARN-only for the first real-run review — the
     # morning pass tightens the share-sum check to an ABORT once eyeballed.

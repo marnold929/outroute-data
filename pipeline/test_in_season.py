@@ -104,7 +104,7 @@ class PublishedBlock(unittest.TestCase):
         in_season.attach_in_season(players, agg, {"3": (20.0, 18.0, 16.0)},
                                    weeks_complete=4)
         self.assertEqual(set(p) - market_keys,
-                         {"isr", "wg", "wpg", "whg", "wsg", "wlp", "wlh", "wls"})
+                         {"isr", "ish", "iss", "sr", "srh", "srs", "wg", "wpg", "whg", "wsg", "wlp", "wlh", "wls"})
 
     def test_isr_is_a_dense_ranking(self):
         players = _players(40)
@@ -146,6 +146,175 @@ class BlendBehaviour(unittest.TestCase):
         ppg[rbs[-1]["sid"]] = 999.0
         in_season.attach_in_season(players, _agg(ppg, games=10), {}, weeks_complete=10)
         self.assertGreaterEqual(rbs[-1]["isr"], rbs[0]["ro"])
+
+
+BOARDS = ("isr", "ish", "iss", "sr", "srh", "srs")
+
+
+def _fmt_agg(ppg_by_sid, games):
+    """pid -> (ppr, half, std) per game -> aggregate records."""
+    return {sid: {"g": games, "ppr": a * games, "half": b * games, "std": c * games}
+            for sid, (a, b, c) in ppg_by_sid.items()}
+
+
+class SixBoards(unittest.TestCase):
+    def test_zero_weeks_every_board_is_ro(self):
+        players = _players()
+        agg = _agg({p["sid"]: float(p["ro"]) for p in players})   # inverted production
+        in_season.attach_in_season(players, agg, {}, weeks_complete=0)
+        for field in BOARDS:
+            self.assertEqual([p[field] for p in players], [p["ro"] for p in players], field)
+
+    def test_every_board_is_a_dense_ranking(self):
+        players = _players(40)
+        agg = _fmt_agg({p["sid"]: (40.0 - p["ro"], (p["ro"] * 7) % 40, float(p["ro"] % 5))
+                        for p in players}, games=4)
+        in_season.attach_in_season(players, agg, {}, weeks_complete=4)
+        for field in BOARDS:
+            self.assertEqual(sorted(p[field] for p in players), list(range(1, 41)), field)
+
+    def test_format_orders_the_boards(self):
+        # WRs at ro 5 and 9 (adjacent WR market slots): A catches everything
+        # (wins PPR), B scores touchdowns (wins standard). Every other WR trails both.
+        players = _players(40)
+        wrs = [p for p in players if p["p"] == "WR"]
+        a, b = next(p for p in wrs if p["ro"] == 5), next(p for p in wrs if p["ro"] == 9)
+        ppg = {p["sid"]: (5.0, 4.0, 3.0) for p in wrs}
+        ppg[a["sid"]] = (20.0, 15.0, 10.0)
+        ppg[b["sid"]] = (18.0, 16.0, 14.0)
+        in_season.attach_in_season(players, _fmt_agg(ppg, games=4), {}, weeks_complete=4)
+        self.assertLess(a["sr"], b["sr"])
+        self.assertGreater(a["srs"], b["srs"])
+        # The projected boards need not flip at four weeks — the PPR-anchored
+        # market still has A ahead — but standard production must pull B
+        # closer to A than PPR production does.
+        self.assertLess(b["iss"] - a["iss"], b["isr"] - a["isr"])
+
+
+class TravelCap(unittest.TestCase):
+    """A top-5 WR with one quiet game must not collapse on the projected board;
+    the season-to-date board reports the quiet game in full."""
+
+    def _board(self, weeks):
+        # 420 players; relabel so the ro%4==0 players are the WRs (ro 4, 8, ... 420).
+        players = _players(420)
+        for p in players:
+            p["p"] = {"WR": "RB", "RB": "WR"}.get(p["p"], p["p"])
+        wrs = [p for p in players if p["p"] == "WR"]
+        star = wrs[0]
+        self.assertEqual(star["ro"], 4)
+        # Every WR produces in market order; the star lands between ro 400 and
+        # 404, i.e. 100th of 105 WRs -> the WR slot at overall 400.
+        ppg = {p["sid"]: 1000.0 - p["ro"] for p in wrs}
+        ppg[star["sid"]] = 598.0
+        agg = _agg(ppg, games=weeks)
+        slot = in_season.production_slots(players, agg, weeks)[star["id"]]
+        in_season.attach_in_season(players, agg, {}, weeks_complete=weeks)
+        return players, wrs, star, slot
+
+    def test_one_week_lands_him_at_the_edge_of_the_band(self):
+        players, wrs, star, slot = self._board(1)
+        self.assertEqual(slot, 400.0)                      # the slot itself is never clamped
+        w = in_season.production_weight(1)
+        blended = (1 - w) * star["ro"] + w * slot
+        self.assertAlmostEqual(blended, 43.6)              # the blend, on the raw slot
+        # ro 4: the floor gives him 10 spots a week, not 0.8.
+        self.assertEqual(in_season.max_travel(star["ro"], 1), 10.0)
+        self.assertEqual(in_season.clamp_travel(blended, star["ro"], 1), 14.0)
+        # The cap bounds the value, not the rank: he lands near the edge of the
+        # band, a few spots either side as everyone around him shifts too.
+        self.assertLessEqual(star["isr"] - star["ro"], 15)
+        self.assertGreater(star["isr"] - star["ro"], 5)
+
+    def test_the_blend_itself_is_undamped(self):
+        # No second damper: with the cap effectively off, the rank is the rank
+        # of the raw blended value (43.6), not of a clamped slot.
+        with mock.patch.object(in_season, "ISR_TRAVEL_PER_WEEK", 10_000.0):
+            _, _, star, _ = self._board(1)
+        self.assertGreater(star["isr"] - star["ro"], 35)
+
+    def test_cap_does_not_touch_season_to_date(self):
+        players, wrs, star, slot = self._board(1)
+        median_wr_slot = sorted(p["ro"] for p in wrs)[len(wrs) // 2]
+        self.assertGreater(star["sr"], median_wr_slot)
+
+    def test_cap_widens_with_weeks(self):
+        _, _, one, _ = self._board(1)
+        _, _, four, _ = self._board(4)
+        self.assertEqual(in_season.clamp_travel(400.0, 4, 4), 44.0)      # 4 weeks x the 10-spot floor
+        self.assertGreater(four["isr"] - four["ro"], one["isr"] - one["ro"])
+
+    def test_cap_is_symmetric(self):
+        self.assertEqual(in_season.clamp_travel(1.0, 300, 1), 240.0)     # ro 300: 60 spots a week
+        self.assertEqual(in_season.clamp_travel(1.0, 300, 0), 300.0)
+        self.assertEqual(in_season.clamp_travel(310.0, 300, 1), 310.0)   # inside the band: untouched
+
+
+class TravelBandShape(unittest.TestCase):
+    """max_travel(ro, n) = n * max(floor, fraction * ro) — a ramp, not tiers."""
+
+    def test_the_landmarks(self):
+        self.assertEqual(in_season.max_travel(50, 1), 10.0)     # the floor still binds
+        self.assertEqual(in_season.max_travel(100, 1), 20.0)
+        self.assertEqual(in_season.max_travel(375, 1), 75.0)
+
+    def test_zero_weeks_is_zero_travel_at_every_rank(self):
+        for ro in (1, 50, 200, 600):
+            self.assertEqual(in_season.max_travel(ro, 0), 0.0, ro)
+
+    def test_continuous_in_ro(self):
+        # No cliff anywhere: adjacent draft ranks get bands a fraction apart,
+        # so nobody can be told "you moved because you were drafted one later".
+        for ro in range(1, 600):
+            step = in_season.max_travel(ro + 1, 4) - in_season.max_travel(ro, 4)
+            self.assertLessEqual(step, 4 * in_season.ISR_TRAVEL_RANK_FRACTION + 1e-9, ro)
+
+    def test_non_decreasing_in_ro_and_in_weeks(self):
+        for n in (0, 1, 4, 10):
+            bands = [in_season.max_travel(ro, n) for ro in range(1, 600)]
+            self.assertEqual(bands, sorted(bands), n)
+        for ro in (1, 50, 375):
+            byweek = [in_season.max_travel(ro, n) for n in range(0, 19)]
+            self.assertEqual(byweek, sorted(byweek), ro)
+
+    def test_the_floor_protects_the_very_top(self):
+        # Without the floor ro 4 would get 0.8 spots a week and never move.
+        self.assertEqual(in_season.max_travel(4, 1), in_season.ISR_TRAVEL_PER_WEEK)
+
+    def test_season_to_date_ignores_the_band_entirely(self):
+        # sr/srh/srs must not change when the travel constants change.
+        def boards(per_week, fraction):
+            players = _players(40)
+            # Production inverted against the market, so the band has something
+            # to bind on: the last player on the board is the best producer.
+            agg = _fmt_agg({p["sid"]: (float(p["ro"]), float(p["ro"]), 40.0 - p["ro"])
+                            for p in players}, games=4)
+            with mock.patch.object(in_season, "ISR_TRAVEL_PER_WEEK", per_week), \
+                    mock.patch.object(in_season, "ISR_TRAVEL_RANK_FRACTION", fraction):
+                in_season.attach_in_season(players, agg, {}, weeks_complete=4)
+            return {p["n"]: tuple(p[f] for f in ("sr", "srh", "srs")) for p in players}, \
+                   {p["n"]: p["isr"] for p in players}
+        tight_sr, tight_isr = boards(1.0, 0.0)
+        wide_sr, wide_isr = boards(10_000.0, 10.0)
+        self.assertEqual(tight_sr, wide_sr)
+        self.assertNotEqual(tight_isr, wide_isr)   # the projected board does change
+
+
+class BelowTheFloorOnAllBoards(unittest.TestCase):
+    def test_keeps_his_ro_slot_everywhere(self):
+        # 10 weeks: floor is 5 games. RB-last has 3 games at an absurd rate in
+        # every format; every other RB produces in market order.
+        players = _players(40)
+        rbs = [p for p in players if p["p"] == "RB"]
+        ppg = {p["sid"]: (100.0 - p["ro"],) * 3 for p in rbs}
+        agg = _fmt_agg(ppg, games=10)
+        hurt = rbs[-1]
+        agg[hurt["sid"]] = {"g": 3, "ppr": 3 * 999.0, "half": 3 * 999.0, "std": 3 * 999.0}
+        for fmt in ("ppr", "half", "std"):
+            self.assertEqual(in_season.production_slots(players, agg, 10, fmt)[hurt["id"]], float(hurt["ro"]), fmt)
+        in_season.attach_in_season(players, agg, {}, weeks_complete=10)
+        for field in BOARDS:
+            self.assertEqual(hurt[field], hurt["ro"], field)
 
 
 class PlayerGamesWeighting(unittest.TestCase):

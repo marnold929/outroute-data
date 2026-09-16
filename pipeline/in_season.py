@@ -1,14 +1,26 @@
-"""In-season overall rank (`isr`) + the published weekly scoring block.
+"""In-season overall ranks + the published weekly scoring block.
 
 STRICTLY ADDITIVE. Nothing here writes `ro`, `rk`, `adp`, `os` or any other
 existing field — guard #10 compares published `ro` against raw-ADP rank, so
 reordering `ro` by production would read as enormous unexplained drift and
-abort every build. The in-season view ships as a NEW field instead, and the
-app is free to ignore it.
+abort every build. The in-season views ship as NEW fields instead, and the
+app is free to ignore them.
 
-What gets published per player (all optional, all omitted when unknown):
+Two boards, three scoring formats each. All six are always present, each a
+dense 1..N ranking of the whole board, and at ZERO completed weeks all six
+equal `ro` exactly.
 
-    isr   in-season overall rank — the blend described below. Always present.
+    isr   projected rest-of-season rank, PPR       — the draft market bent
+    ish   projected rest-of-season rank, half-PPR    toward production as
+    iss   projected rest-of-season rank, standard    evidence accumulates
+          (weighted, travel-capped blend; see WEIGHTING). isr is the default.
+
+    sr    season-to-date rank, PPR                 — what has actually
+    srh   season-to-date rank, half-PPR              happened: production
+    srs   season-to-date rank, standard              order within position on
+          the market's slots, no weight, no blend, no cap.
+
+The weekly block (optional, omitted when the player has no games):
     wg    games played in COMPLETED weeks
     wpg   PPR points per game, whole number
     whg   half-PPR points per game, whole number
@@ -99,10 +111,75 @@ except ImportError:           # run as a script (build.py puts pipeline/ on sys.
 # played every week keeps the full weight however far his depth-chart market
 # slot is from his production. It does not rescue a player who has played and
 # not produced — Loveland (3 of 4, 2.4 PPG) still falls, by less.
+#
+# ISR_TRAVEL_PER_WEEK / ISR_TRAVEL_RANK_FRACTION — the band the projected rank
+# may travel from the draft rank. Applied to the OUTPUT of the blend:
+#
+#     blended = (1 - w) * ro + w * slot        # the slot is never clamped
+#     max_travel(ro, n) = n * max(ISR_TRAVEL_PER_WEEK, ISR_TRAVEL_RANK_FRACTION * ro)
+#     blended is clamped into [ro - max_travel, ro + max_travel]
+#
+# Read it as: after n completed weeks, a player's projected rank sits within
+# max_travel spots of where he was drafted.
+#
+# Why the output and not the slot. production_slots hands a player the market
+# slot of his production rank within his position, and after one week that is
+# one game: a WR1 with a quiet afternoon lands on a WR60 slot. Clamping the
+# SLOT and then blending applies two dampers in series — the week-1 weight of
+# 0.10 shrinks whatever the cap allowed by a further 90%, so a 25-spot cap
+# yielded at most 4 spots of real movement across the whole live board. The
+# weight decides how much to trust production; this decides how far the result
+# may end up from the draft board, which is the thing a reader notices.
+#
+# Why the band scales with rank. Draft capital is information, and there is far
+# more of it at the top of the board than at the bottom. The gap between the
+# market's WR3 and its WR8 is thousands of drafters disagreeing by a handful of
+# picks; the gap between WR70 and WR90 is nearly noise. A flat number of spots
+# has to serve both and serves neither: small enough to keep a first-rounder
+# from swinging on one Sunday, it pins the whole tail in place; large enough to
+# let the tail move, it lets the first-rounder swing.
+#
+# Why a ramp and not tiers. Bracketing (say 25 spots inside the top 50, 50
+# outside it) puts a cliff in the middle of the board: ro 51 could travel twice
+# as far as ro 49 on identical production, and no user could ever be told why.
+# A ramp has no edge to trip over — two players drafted a pick apart get bands a
+# pick apart.
+#
+# The landmarks these constants were chosen against, per completed week:
+#
+#     ro  50 ->  10 spots      (the floor still binds here)
+#     ro 100 ->  20 spots
+#     ro 375 ->  75 spots
+#
+# The floor matters at the very top: without it ro 4 would get 0.8 spots a week
+# and never move at all. With it, an early-round bust travels 10 spots a week —
+# visible by week 1, out of the round by week 3 — while a ro 375 flier can climb
+# 75 a week, which is what it takes to notice a waiver-wire breakout at all.
+#
+# The asymmetry, carried over from the move to the output: a player's blend
+# travels w * (sr - ro), so the distance scales with how far his production
+# rank sits from his draft rank. High draft capital plus bad production is a
+# huge (sr - ro) against a small band, so the cap bites hard; a late-round
+# climber has a large band and a blend that rarely reaches it, so the cap
+# barely touches him. That is intended: the claim "he was drafted 4th" is worth
+# defending against one bad game, and "he was drafted 375th" is not.
+#
+# Two honest caveats:
+#   * It bounds the blended VALUE, not the final rank. Ranks come from sorting
+#     those values, and everyone around a player moves too, so a capped player
+#     can still land a few spots outside the band.
+#   * It binds only on extreme movers. An ordinary week-1 move (a 30-spot slot
+#     change at w = 0.10, three spots of value) is nowhere near the band and
+#     passes through untouched.
+#
+# Zero weeks means zero travel, so isr == ro at week 0 holds by construction as
+# well as by weight.
 PROD_WEIGHT_HALF = 9.0
 PROD_WEIGHT_MAX = 0.60
 PROD_MIN_GAMES_SHARE = 0.5
 PROD_GAMES_EXPONENT = 2.0
+ISR_TRAVEL_PER_WEEK = 10.0        # floor, in spots per completed week
+ISR_TRAVEL_RANK_FRACTION = 0.20   # of the player's own ro, per completed week
 
 # Positions the production rank is computed within (see production_slots).
 POSITIONS = ("QB", "RB", "WR", "TE", "K", "DST")
@@ -118,6 +195,21 @@ def production_weight(weeks_complete: int) -> float:
     if n == 0:
         return 0.0
     return min(PROD_WEIGHT_MAX, n / (n + PROD_WEIGHT_HALF))
+
+
+def max_travel(ro: float, weeks_complete: int) -> float:
+    """How far a projected rank may travel from `ro` after `weeks_complete`
+    weeks: the per-week band (a floor, or a fraction of his own draft rank,
+    whichever is larger) times the weeks. Exactly 0.0 at zero completed weeks,
+    continuous and non-decreasing in both arguments. See the block above."""
+    per_week = max(ISR_TRAVEL_PER_WEEK, ISR_TRAVEL_RANK_FRACTION * max(0.0, float(ro)))
+    return per_week * max(0, int(weeks_complete or 0))
+
+
+def clamp_travel(blended: float, ro: float, weeks_complete: int) -> float:
+    """A blended value clamped into [ro - max_travel, ro + max_travel]."""
+    reach = max_travel(ro, weeks_complete)
+    return min(ro + reach, max(ro - reach, blended))
 
 
 def games_available(player: dict, completed_weeks) -> int:
@@ -147,8 +239,11 @@ def min_games_for(weeks_complete: int) -> int:
     return max(1, math.ceil(PROD_MIN_GAMES_SHARE * n))
 
 
-def production_slots(players: list[dict], agg: dict, weeks_complete: int) -> dict[str, float]:
-    """Each player's production rank ON THE OVERALL SCALE, as id -> rank.
+def production_slots(players: list[dict], agg: dict, weeks_complete: int,
+                     fmt: str = "ppr") -> dict[str, float]:
+    """Each player's production rank ON THE OVERALL SCALE, as id -> rank, with
+    players ordered by points per game in scoring format `fmt` ("ppr", "half"
+    or "std" — the aggregate's keys).
 
     Ranking by raw points across positions would be meaningless — every QB
     outscores every RB — so production is ranked WITHIN a position, and those
@@ -162,6 +257,11 @@ def production_slots(players: list[dict], agg: dict, weeks_complete: int) -> dic
     """
     floor = min_games_for(weeks_complete)
     slots = {p["id"]: float(p["ro"]) for p in players}
+    if max(0, int(weeks_complete or 0)) == 0:
+        # No completed week, nothing to rank: every slot is ro. The blend was
+        # already safe here (zero weight, zero travel), but sr/srh/srs read the
+        # slots raw and must equal ro too, whatever the caller passes as agg.
+        return slots
     for pos in POSITIONS:
         played = [p for p in players
                   if p["p"] == pos
@@ -171,10 +271,17 @@ def production_slots(players: list[dict], agg: dict, weeks_complete: int) -> dic
         # The market's overall ranks for this position, handed back out in
         # production order (best PPG first; ties keep market order).
         market_slots = sorted(p["ro"] for p in played)
-        by_production = sorted(played, key=lambda p: (-per_game(agg[p["sid"]], "ppr"), p["ro"]))
+        by_production = sorted(played, key=lambda p: (-per_game(agg[p["sid"]], fmt), p["ro"]))
         for slot, p in zip(market_slots, by_production):
             slots[p["id"]] = float(slot)
     return slots
+
+
+def _publish_rank(players: list[dict], value: dict[str, float], field: str) -> None:
+    """Number players 1..N into `field` by (value, ro): ro breaks ties, so a
+    board where every value equals ro reproduces ro exactly."""
+    for i, p in enumerate(sorted(players, key=lambda p: (value[p["id"]], p["ro"]))):
+        p[field] = i + 1
 
 
 def attach_in_season(players: list[dict], agg: dict, last_week_points: dict,
@@ -206,16 +313,38 @@ def attach_in_season(players: list[dict], agg: dict, last_week_points: dict,
             p["wlp"], p["wlh"], p["wls"] = (round(v, 1) for v in last)
         filled += 1
 
-    slots = production_slots(players, agg, weeks_complete)
-    blended = {}
+    # Season-to-date boards: the UNCLAMPED production slots, ranked as they
+    # are — no weight, no blend, no travel cap. A player below the games floor
+    # (PROD_MIN_GAMES_SHARE) or with no games keeps his own ro as his slot:
+    # we cannot rank him on production yet, and his market rank is the honest
+    # placeholder, not a guess at points he hasn't scored.
+    #
+    # Projected boards: isr (PPR), ish (half), iss (standard). Built the same
+    # way for every format — production slot in that format's points per game,
+    # travel-clamped, then blended with ro at the player's weight.
+    #
+    # The approximation, stated plainly: the market anchor (ro, from FFC's PPR
+    # pool) is PPR-only, so ish and iss blend a PPR-anchored market rank with
+    # half/standard production. A pass-catching back is over-priced by that
+    # anchor in standard and only production pulls him back. It is still a
+    # better standard board than a PPR board shown under a STANDARD label.
+    for field, fmt in (("sr", "ppr"), ("srh", "half"), ("srs", "std")):
+        _publish_rank(players, production_slots(players, agg, weeks_complete, fmt), field)
+
+    weights = {}
     for p in players:
         games = (agg.get(p.get("sid") or "") or {}).get("g") or 0
-        w = player_weight(weight, games, games_available(p, completed_weeks))
-        blended[p["id"]] = (1.0 - w) * p["ro"] + w * slots[p["id"]]
-    # Ties (and every player when weight == 0) fall back to market order, so a
-    # zero-weight blend reproduces `ro` exactly rather than merely closely.
-    for i, p in enumerate(sorted(players, key=lambda p: (blended[p["id"]], p["ro"]))):
-        p["isr"] = i + 1
+        weights[p["id"]] = player_weight(weight, games, games_available(p, completed_weeks))
+    for field, fmt in (("isr", "ppr"), ("ish", "half"), ("iss", "std")):
+        slots = production_slots(players, agg, weeks_complete, fmt)
+        blended = {}
+        for p in players:
+            w = weights[p["id"]]
+            value = (1.0 - w) * p["ro"] + w * slots[p["id"]]
+            blended[p["id"]] = clamp_travel(value, p["ro"], weeks_complete)
+        # Ties (and every player when weight == 0) fall back to market order, so
+        # a zero-weight blend reproduces `ro` exactly rather than merely closely.
+        _publish_rank(players, blended, field)
     return filled, weight
 
 
