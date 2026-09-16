@@ -155,3 +155,112 @@ class UsageSeasonSource(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _sleeper(*recs):
+    """Sleeper payload from (pid, name, pos, status, **extra) tuples, in order.
+    Iteration order is the dict's insertion order, so these tests can put the
+    active record before OR after the inactive one and pin both outcomes."""
+    out = {}
+    for pid, name, pos, status, *rest in recs:
+        rec = {"full_name": name, "position": pos, "team": "NE", "status": status}
+        rec.update(rest[0] if rest else {})
+        out[pid] = rec
+    return out
+
+
+class ActivePreferredMatching(unittest.TestCase):
+    """build_sleeper_index contests the name|POS slot instead of filtering.
+
+    The old rule dropped every Inactive record, which is why A.J. Brown — on IR
+    with a sprained ankle — matched nothing and published 14th overall clean.
+    """
+
+    def test_inactive_is_matched_when_nobody_else_claims_the_slot(self):
+        # The A.J. Brown case, as Sleeper actually publishes him.
+        idx = model.build_sleeper_index(_sleeper(
+            ("5859", "A.J. Brown", "WR", "Inactive", {"injury_status": "IR",
+                                                      "injury_body_part": "Ankle"})))
+        self.assertIn("aj brown|WR", idx)
+        self.assertEqual(idx["aj brown|WR"]["_pid"], "5859")
+        self.assertEqual(idx["aj brown|WR"]["injury_status"], "IR")
+
+    def test_active_beats_inactive_when_the_active_comes_second(self):
+        idx = model.build_sleeper_index(_sleeper(
+            ("111", "Duplicate Name", "WR", "Inactive"),
+            ("222", "Duplicate Name", "WR", "Active")))
+        self.assertEqual(idx["duplicate name|WR"]["_pid"], "222")
+
+    def test_active_beats_inactive_when_the_active_comes_first(self):
+        # The order-flipped half: last-writer-wins must NOT hand the slot back.
+        idx = model.build_sleeper_index(_sleeper(
+            ("222", "Duplicate Name", "WR", "Active"),
+            ("111", "Duplicate Name", "WR", "Inactive")))
+        self.assertEqual(idx["duplicate name|WR"]["_pid"], "222")
+
+    def test_retired_is_still_excluded_outright(self):
+        idx = model.build_sleeper_index(_sleeper(("333", "Gone Fishing", "RB", "Retired")))
+        self.assertNotIn("gone fishing|RB", idx)
+
+    def test_retired_never_takes_a_slot_from_an_inactive(self):
+        # A retired duplicate is exactly what the original filter existed to stop.
+        idx = model.build_sleeper_index(_sleeper(
+            ("333", "Shared Name", "RB", "Inactive", {"injury_status": "IR"}),
+            ("444", "Shared Name", "RB", "Retired")))
+        self.assertEqual(idx["shared name|RB"]["_pid"], "333")
+
+    def test_a_different_position_is_a_different_slot(self):
+        idx = model.build_sleeper_index(_sleeper(
+            ("555", "Two Ways", "WR", "Active"),
+            ("666", "Two Ways", "TE", "Inactive")))
+        self.assertEqual(idx["two ways|WR"]["_pid"], "555")
+        self.assertEqual(idx["two ways|TE"]["_pid"], "666")
+
+    def test_defenses_are_exempt_from_the_status_rule(self):
+        sl = {"NE": {"last_name": "Patriots", "position": "DEF", "team": "NE",
+                     "status": "Inactive"}}
+        self.assertIn("patriots dst|DST", model.build_sleeper_index(sl))
+
+
+class UnmatchedTopGuard(unittest.TestCase):
+    """Nobody in the top 50 may publish without a Sleeper id."""
+
+    @staticmethod
+    def _rows(**overrides):
+        rows = [{"n": f"Player {i}", "p": "WR", "t": "NE", "ro": i, "sid": str(1000 + i)}
+                for i in range(1, 61)]
+        for ro, patch in overrides.items():
+            rows[int(ro) - 1].update(patch)
+        return rows
+
+    def test_a_full_board_passes(self):
+        self.assertEqual(model.unmatched_top_players(self._rows()), [])
+
+    def test_an_unmatched_top_50_player_trips_it_and_is_named(self):
+        hits = model.unmatched_top_players(self._rows(**{"14": {"n": "A.J. Brown", "sid": None}}))
+        self.assertEqual([h["n"] for h in hits], ["A.J. Brown"])
+
+    def test_the_boundary_is_inclusive_at_50_and_open_at_51(self):
+        self.assertEqual(len(model.unmatched_top_players(self._rows(**{"50": {"sid": None}}))), 1)
+        self.assertEqual(model.unmatched_top_players(self._rows(**{"51": {"sid": None}})), [])
+
+    def test_unmatched_defenses_never_trip_it(self):
+        # All 32 DSTs ship unmatched every build by design; a DST high on the board
+        # must not be what blocks a publish.
+        rows = self._rows(**{"20": {"p": "DST", "n": "New England Defense D/ST", "sid": None}})
+        self.assertEqual(model.unmatched_top_players(rows), [])
+
+    def test_a_missing_sid_key_counts_as_unmatched(self):
+        rows = self._rows()
+        del rows[13]["sid"]
+        self.assertEqual([h["ro"] for h in model.unmatched_top_players(rows)], [14])
+
+    def test_several_hits_come_back_in_board_order(self):
+        hits = model.unmatched_top_players(
+            self._rows(**{"40": {"sid": None}, "3": {"sid": None}, "22": {"sid": None}}))
+        self.assertEqual([h["ro"] for h in hits], [3, 22, 40])
+
+    def test_rows_without_a_rank_are_ignored(self):
+        rows = self._rows()
+        rows.append({"n": "Unranked", "p": "WR", "t": "NE", "ro": None, "sid": None})
+        self.assertEqual(model.unmatched_top_players(rows), [])

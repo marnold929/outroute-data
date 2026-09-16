@@ -200,8 +200,21 @@ def spread_of(entry: dict) -> tuple:
 
 
 def build_sleeper_index(sleeper: dict) -> dict:
-    """normalized 'name|POS' -> sleeper player dict (active players only)."""
-    idx = {}
+    """normalized 'name|POS' -> sleeper player dict, ACTIVE-preferred.
+
+    The old rule skipped every "Inactive" record outright. That kept retired and
+    practice-squad duplicates from colliding on name, but it also threw away the
+    injury data of everyone Sleeper marks Inactive — which is precisely the set
+    the board most needs to flag. A.J. Brown published 14th overall, healthy, with
+    no sid, while Sleeper had him on IR with an ankle sprain.
+
+    So the slot is contested rather than filtered: an ACTIVE player always wins
+    `name|POS`, and an inactive one is indexed only when no active player claims
+    it. Retired stays excluded outright, and DST is exempt as before (team
+    defenses carry their own status conventions).
+    """
+    idx: dict = {}
+    claim: dict = {}   # key -> 0 an active claimed it, 1 only a fallback has
     for pid, p in sleeper.items():
         if not isinstance(p, dict):
             continue
@@ -211,11 +224,39 @@ def build_sleeper_index(sleeper: dict) -> dict:
             name = f"{p.get('last_name', pid)} D/ST"
         if not name or pos not in {"QB", "RB", "WR", "TE", "K", "DST"}:
             continue
-        if p.get("status") in ("Inactive", "Retired") and pos != "DST":
+        status = p.get("status")
+        if status == "Retired" and pos != "DST":
             continue
+        tier = 0 if (pos == "DST" or status == "Active") else 1
+        key = norm(name) + "|" + pos
+        if key in idx and claim[key] < tier:
+            continue   # an active player already holds this slot
         p["_pid"] = pid
-        idx[norm(name) + "|" + pos] = p
+        idx[key] = p
+        claim[key] = tier
     return idx
+
+
+# Guard: how deep the "every player must carry a Sleeper id" rule reaches.
+# A player this high on the board with no match has no injury status, no depth
+# chart and no usage — he publishes looking healthy no matter what happened to
+# him. A.J. Brown published 14th overall, unflagged, while Sleeper had him on IR.
+UNMATCHED_TOP_N = 50
+
+
+def unmatched_top_players(players: list[dict], top_n: int = UNMATCHED_TOP_N) -> list[dict]:
+    """Non-DST players inside the top `top_n` by `ro` that carry no Sleeper id.
+
+    Team defenses are exempt: they are matched wholesale by team rather than by
+    name, and all 32 of them ship with a null sid on every board BY DESIGN.
+    Returns them in board order so the abort message reads top-down.
+    """
+    hits = [p for p in players
+            if p.get("ro") is not None
+            and p["ro"] <= top_n
+            and p.get("p") != "DST"
+            and not p.get("sid")]
+    return sorted(hits, key=lambda p: p["ro"])
 
 
 def injury_note(sp: dict) -> str | None:

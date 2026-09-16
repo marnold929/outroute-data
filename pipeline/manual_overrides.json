@@ -10,8 +10,6 @@
   "Tyreek Hill": "Unsigned FA, rehabbing knee dislocation; uncertain for 2026",
   "A.J. Brown": "On IR with an ankle sprain; no return timeline announced"
  },
- "rank_nudge": {
-  "A.J. Brown": -60
- },
+ "rank_nudge": {},
  "exclude": []
 }

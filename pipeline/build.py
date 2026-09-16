@@ -312,6 +312,20 @@ def main():
                   f"(<{MIN_SLEEPER_MATCH:.0%}); name-matching degraded — keeping previous file.")
             sys.exit(1)
 
+    # Guard #11 — an unmatched player near the top of the board. A top-50 player
+    # with no Sleeper id carries no injury status, no depth chart and no usage, so
+    # he publishes looking healthy whatever has happened to him: A.J. Brown went
+    # out 14th overall, unflagged, while Sleeper had him on IR with a sprained
+    # ankle. Team defenses are matched by team wholesale and never count here.
+    unmatched = model.unmatched_top_players(players)
+    if unmatched:
+        print(f"ABORT: {len(unmatched)} player(s) inside the top {model.UNMATCHED_TOP_N} by ro "
+              f"carry no Sleeper id (no injury status, no depth chart, no usage):")
+        for p in unmatched:
+            print(f"    ro {p['ro']:>3}  {p['n']} ({p['p']} {p.get('t') or '--'})")
+        print("  keeping previous file.")
+        sys.exit(1)
+
     filled = model.attach_usage(players, completed_stats, SEASON_YEAR, current_season=True,
                                 sleeper_players=sleeper,
                                 fallback_weeks=prev_weeks_stats, fallback_season=SEASON_YEAR - 1)
