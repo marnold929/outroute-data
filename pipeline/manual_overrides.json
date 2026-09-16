@@ -7,8 +7,11 @@
   "Josh Jacobs": "On the NFL Commissioner's Exempt List to begin the season; no return timeline announced",
   "Rashee Rice": "Further NFL discipline possible + knee surgery recovery",
   "Tucker Kraft": "Nov 2025 ACL tear; targeting late-August return",
-  "Tyreek Hill": "Unsigned FA, rehabbing knee dislocation; uncertain for 2026"
+  "Tyreek Hill": "Unsigned FA, rehabbing knee dislocation; uncertain for 2026",
+  "A.J. Brown": "On IR with an ankle sprain; no return timeline announced"
  },
- "rank_nudge": {},
+ "rank_nudge": {
+  "A.J. Brown": -60
+ },
  "exclude": []
 }
