@@ -233,8 +233,42 @@ class UnmatchedTopGuard(unittest.TestCase):
             rows[int(ro) - 1].update(patch)
         return rows
 
+    @staticmethod
+    def _market_rows(**overrides):
+        """Same board, with a real market ADP on every row: ADP rank == ro until
+        a patch moves someone. `os` is what marks a row as market-priced."""
+        rows = UnmatchedTopGuard._rows(**overrides)
+        for i, r in enumerate(rows, start=1):
+            r.setdefault("adp", float(i))
+            r.setdefault("os", float(i))
+        return rows
+
     def test_a_full_board_passes(self):
         self.assertEqual(model.unmatched_top_players(self._rows()), [])
+
+    def test_a_penalty_or_nudge_cannot_hide_a_top_50_market_player(self):
+        # The case that motivated hardening: A.J. Brown, unmatched, the market's
+        # 14th pick, pushed to ro 75 by a -60 nudge. `ro` alone says he is outside
+        # the top 50; the market says he is a second-round pick. He must trip it.
+        rows = self._market_rows()
+        brown = rows[13]
+        brown.update({"n": "A.J. Brown", "sid": None, "ro": 75})
+        rows.sort(key=lambda r: r["ro"])
+        hits = model.unmatched_top_players(rows)
+        self.assertEqual([(h["n"], h["ro"]) for h in hits], [("A.J. Brown", 75)])
+
+    def test_a_genuinely_late_market_player_outside_the_top_50_still_passes(self):
+        # The other side of it: ro 56 AND ADP rank 56 is simply a deep player.
+        rows = self._market_rows()
+        rows[55].update({"sid": None})
+        self.assertEqual(model.unmatched_top_players(rows), [])
+
+    def test_an_adpless_player_is_judged_on_ro_alone(self):
+        # No `os` -> no market opinion (the add_adpless sentinel sets adp = ro).
+        rows = self._market_rows()
+        rows[13].update({"sid": None, "os": None, "adp": 14.0, "ro": 75})
+        rows.sort(key=lambda r: r["ro"])
+        self.assertEqual(model.unmatched_top_players(rows), [])
 
     def test_an_unmatched_top_50_player_trips_it_and_is_named(self):
         hits = model.unmatched_top_players(self._rows(**{"14": {"n": "A.J. Brown", "sid": None}}))

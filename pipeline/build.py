@@ -320,7 +320,7 @@ def main():
     unmatched = model.unmatched_top_players(players)
     if unmatched:
         print(f"ABORT: {len(unmatched)} player(s) inside the top {model.UNMATCHED_TOP_N} by ro "
-              f"carry no Sleeper id (no injury status, no depth chart, no usage):")
+              f"or by market ADP carry no Sleeper id (no injury status, no depth chart, no usage):")
         for p in unmatched:
             print(f"    ro {p['ro']:>3}  {p['n']} ({p['p']} {p.get('t') or '--'})")
         print("  keeping previous file.")

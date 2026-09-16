@@ -245,17 +245,35 @@ UNMATCHED_TOP_N = 50
 
 
 def unmatched_top_players(players: list[dict], top_n: int = UNMATCHED_TOP_N) -> list[dict]:
-    """Non-DST players inside the top `top_n` by `ro` that carry no Sleeper id.
+    """Non-DST players the market OR the board puts inside the top `top_n` that
+    carry no Sleeper id.
+
+    "Inside the top N" is the BETTER of a player's published `ro` and his rank
+    by raw market ADP, the same two-sided scope guard #10 uses. Reading `ro`
+    alone would have made this guard blind in exactly the case that motivated
+    it: `ro` is post-penalty, so anything we do to a player — an injury penalty,
+    a depth-chart knock, a manual nudge — pushes him out of the top 50 and out
+    of the guard's sight. A.J. Brown nudged to ro 75 would have sailed past a
+    ro-only guard while still being the market's 14th pick. A player the market
+    treats as a top-50 pick stays guarded no matter what we have done to him.
 
     Team defenses are exempt: they are matched wholesale by team rather than by
     name, and all 32 of them ship with a null sid on every board BY DESIGN.
     Returns them in board order so the abort message reads top-down.
     """
-    hits = [p for p in players
-            if p.get("ro") is not None
-            and p["ro"] <= top_n
-            and p.get("p") != "DST"
-            and not p.get("sid")]
+    # Market players only: `os` marks a real market ADP, as opposed to the
+    # add_adpless sentinel (adp == ro), which carries no market opinion at all.
+    # Keyed by object identity so this works on rows that predate the feed's
+    # `id` field and on hand-built test rows.
+    market = sorted((p for p in players if p.get("os") is not None and p.get("adp") is not None),
+                    key=lambda p: p["adp"])
+    adp_rank = {id(p): i + 1 for i, p in enumerate(market)}
+    hits = []
+    for p in players:
+        if p.get("ro") is None or p.get("p") == "DST" or p.get("sid"):
+            continue
+        if min(p["ro"], adp_rank.get(id(p), p["ro"])) <= top_n:
+            hits.append(p)
     return sorted(hits, key=lambda p: p["ro"])
 
 
