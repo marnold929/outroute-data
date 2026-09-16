@@ -112,38 +112,50 @@ except ImportError:           # run as a script (build.py puts pipeline/ on sys.
 # slot is from his production. It does not rescue a player who has played and
 # not produced — Loveland (3 of 4, 2.4 PPG) still falls, by less.
 #
-# PROD_SLOT_TRAVEL_PER_WEEK = 25.0 — how far a player's production slot may sit
-# from his market rank before the blend, per completed week:
+# ISR_TRAVEL_PER_WEEK = 25.0 — the band the projected rank may travel from the
+# draft rank, per completed week. It is applied to the OUTPUT of the blend:
 #
-#     max_travel(n) = PROD_SLOT_TRAVEL_PER_WEEK * n
-#     slot is clamped into [ro - max_travel(n), ro + max_travel(n)]
+#     blended = (1 - w) * ro + w * slot        # the slot is never clamped
+#     max_travel(n) = ISR_TRAVEL_PER_WEEK * n
+#     blended is clamped into [ro - max_travel(n), ro + max_travel(n)]
 #
-# The weight above says how much to trust production; it cannot say how FAR one
-# game should be allowed to throw a player. production_slots hands a player the
-# market slot of his production rank within his position, and after one week
-# that is one game: a WR1 with a quiet afternoon lands on a WR60 slot. 10% of a
-# 200-spot gap is a 20-spot move off a single game, which is exactly the lurch
-# the weight curve was meant to prevent. The cap bounds the DISTANCE instead.
+# Read it as: after n completed weeks, a player's projected rank sits within
+# ISR_TRAVEL_PER_WEEK * n spots of where he was drafted.
 #
-# Why 25: one week lets a player move at most w(1) * 25 = 2.5 spots of blended
-# value before re-ranking — about a round-and-a-bit's worth of neighbours in a
-# dense board, visible but never a collapse. It widens linearly, so four weeks
-# of evidence may pull a slot 100 spots, and from week 8 (200 spots) it stops
-# binding anywhere in the usable part of the board. Symmetric: a breakout at
-# ro 300 does not reach the top 10 on one game either. Zero weeks means zero
-# travel, so isr == ro at week 0 holds by construction as well as by weight.
+# Why the output and not the slot. production_slots hands a player the market
+# slot of his production rank within his position, and after one week that is
+# one game: a WR1 with a quiet afternoon lands on a WR60 slot. Clamping the
+# SLOT and then blending applies two dampers in series — the week-1 weight of
+# 0.10 shrinks whatever the cap allowed by a further 90%, so a 25-spot cap
+# yielded at most 4 spots of real movement across the whole live board. The
+# weight decides how much to trust production; this decides how far the result
+# may end up from the draft board, which is the thing a reader notices.
+#
+# Two honest caveats:
+#   * It bounds the blended VALUE, not the final rank. Ranks come from sorting
+#     those values, and everyone around a player moves too, so a capped player
+#     can still land a few spots outside the band.
+#   * It binds only on extreme movers. An ordinary week-1 move (a 30-spot slot
+#     change at w = 0.10, three spots of value) is nowhere near the band and
+#     passes through untouched.
+#
+# Why 25: at one completed week it holds a collapse or a breakout to about a
+# round and a half of the draft board, and it widens linearly — 100 spots by
+# week 4, 200 by week 8, where it stops binding anywhere in the usable part of
+# the board. Symmetric, so a breakout at ro 300 does not reach the top 10 on
+# one game either. Zero weeks means zero travel, so isr == ro at week 0 holds
+# by construction as well as by weight.
 #
 # The case that set it, the live board after 2026 week 1 (w = 0.10):
 #
-#     Ja'Marr Chase  ro 4,  3.2 pts: slot 241 -> blended 27.7, isr 21
-#                            capped:  slot  29 -> blended  6.5
-#     Drake London   ro 14, 5.5 pts: slot 177 -> blended 30.3, isr 26
-#                            capped:  slot  39 -> blended 16.5
+#     Ja'Marr Chase  ro 4,  3.2 pts: slot 241 -> blended 27.7 -> capped 29.0
+#     Drake London   ro 14, 5.5 pts: slot 177 -> blended 30.3 -> capped 30.3
+#                                    (inside the band: untouched)
 PROD_WEIGHT_HALF = 9.0
 PROD_WEIGHT_MAX = 0.60
 PROD_MIN_GAMES_SHARE = 0.5
 PROD_GAMES_EXPONENT = 2.0
-PROD_SLOT_TRAVEL_PER_WEEK = 25.0
+ISR_TRAVEL_PER_WEEK = 25.0
 
 # Positions the production rank is computed within (see production_slots).
 POSITIONS = ("QB", "RB", "WR", "TE", "K", "DST")
@@ -162,15 +174,15 @@ def production_weight(weeks_complete: int) -> float:
 
 
 def max_travel(weeks_complete: int) -> float:
-    """How far a production slot may sit from ro before blending (see
-    PROD_SLOT_TRAVEL_PER_WEEK). Exactly 0.0 at zero completed weeks."""
-    return PROD_SLOT_TRAVEL_PER_WEEK * max(0, int(weeks_complete or 0))
+    """How far a projected rank may travel from ro (see ISR_TRAVEL_PER_WEEK).
+    Exactly 0.0 at zero completed weeks."""
+    return ISR_TRAVEL_PER_WEEK * max(0, int(weeks_complete or 0))
 
 
-def clamp_slot(slot: float, ro: float, weeks_complete: int) -> float:
-    """`slot` clamped into [ro - max_travel, ro + max_travel]."""
+def clamp_travel(blended: float, ro: float, weeks_complete: int) -> float:
+    """A blended value clamped into [ro - max_travel, ro + max_travel]."""
     reach = max_travel(weeks_complete)
-    return min(ro + reach, max(ro - reach, slot))
+    return min(ro + reach, max(ro - reach, blended))
 
 
 def games_available(player: dict, completed_weeks) -> int:
@@ -301,8 +313,8 @@ def attach_in_season(players: list[dict], agg: dict, last_week_points: dict,
         blended = {}
         for p in players:
             w = weights[p["id"]]
-            slot = clamp_slot(slots[p["id"]], p["ro"], weeks_complete)
-            blended[p["id"]] = (1.0 - w) * p["ro"] + w * slot
+            value = (1.0 - w) * p["ro"] + w * slots[p["id"]]
+            blended[p["id"]] = clamp_travel(value, p["ro"], weeks_complete)
         # Ties (and every player when weight == 0) fall back to market order, so
         # a zero-weight blend reproduces `ro` exactly rather than merely closely.
         _publish_rank(players, blended, field)

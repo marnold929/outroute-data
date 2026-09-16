@@ -212,16 +212,24 @@ class TravelCap(unittest.TestCase):
         in_season.attach_in_season(players, agg, {}, weeks_complete=weeks)
         return players, wrs, star, slot
 
-    def test_one_week_is_clamped_and_stays_near_ro(self):
+    def test_one_week_lands_him_at_the_edge_of_the_band(self):
         players, wrs, star, slot = self._board(1)
-        self.assertEqual(slot, 400.0)
-        clamped = in_season.clamp_slot(slot, star["ro"], 1)
-        self.assertEqual(clamped, 29.0)
+        self.assertEqual(slot, 400.0)                      # the slot itself is never clamped
         w = in_season.production_weight(1)
-        # His isr is exactly the rank of that clamped blend among everyone else's.
-        blended = (1 - w) * star["ro"] + w * clamped
-        self.assertAlmostEqual(blended, 6.5)
-        self.assertLessEqual(abs(star["isr"] - star["ro"]), 10)
+        blended = (1 - w) * star["ro"] + w * slot
+        self.assertAlmostEqual(blended, 43.6)              # the blend, on the raw slot
+        self.assertEqual(in_season.clamp_travel(blended, star["ro"], 1), 29.0)
+        # The cap bounds the value, not the rank: he lands near the edge of the
+        # band, a few spots either side as everyone around him shifts too.
+        self.assertLessEqual(star["isr"] - star["ro"], 30)
+        self.assertGreater(star["isr"] - star["ro"], 20)
+
+    def test_the_blend_itself_is_undamped(self):
+        # No second damper: with the cap effectively off, the rank is the rank
+        # of the raw blended value (43.6), not of a clamped slot.
+        with mock.patch.object(in_season, "ISR_TRAVEL_PER_WEEK", 10_000.0):
+            _, _, star, _ = self._board(1)
+        self.assertGreater(star["isr"] - star["ro"], 35)
 
     def test_cap_does_not_touch_season_to_date(self):
         players, wrs, star, slot = self._board(1)
@@ -231,13 +239,13 @@ class TravelCap(unittest.TestCase):
     def test_cap_widens_with_weeks(self):
         _, _, one, _ = self._board(1)
         _, _, four, _ = self._board(4)
-        self.assertEqual(in_season.clamp_slot(400.0, 4, 4), 104.0)
+        self.assertEqual(in_season.clamp_travel(400.0, 4, 4), 104.0)
         self.assertGreater(four["isr"] - four["ro"], one["isr"] - one["ro"])
 
     def test_cap_is_symmetric(self):
-        self.assertEqual(in_season.clamp_slot(1.0, 300, 1), 275.0)
-        self.assertEqual(in_season.clamp_slot(1.0, 300, 0), 300.0)
-        self.assertEqual(in_season.clamp_slot(310.0, 300, 1), 310.0)   # inside the cap: untouched
+        self.assertEqual(in_season.clamp_travel(1.0, 300, 1), 275.0)
+        self.assertEqual(in_season.clamp_travel(1.0, 300, 0), 300.0)
+        self.assertEqual(in_season.clamp_travel(310.0, 300, 1), 310.0)   # inside the band: untouched
 
 
 class BelowTheFloorOnAllBoards(unittest.TestCase):
