@@ -31,6 +31,15 @@ The weekly block (optional, omitted when the player has no games):
 
 The season TOTAL is deliberately not published: it is wg * the per-game rate,
 and a field a reader can multiply is a field we should not pay bytes for.
+
+Not from this module, but published beside these and listed here so the field
+reference stays in one place (build.attach_trending_adds owns it):
+    ta    Sleeper trending ADDS over the last 24 hours, whole number. The
+          window is Sleeper's, not ours: sources.SLEEPER_TRENDING_URL asks for
+          trending/add with lookback_hours=24. Omitted when zero, and omitted
+          when the player matched no Sleeper id — so `ta` present always means
+          a real, non-zero count, and `ta` absent never has to be read as
+          "zero adds" versus "we never matched him".
 """
 
 from __future__ import annotations

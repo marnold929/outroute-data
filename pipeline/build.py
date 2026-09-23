@@ -3,6 +3,10 @@
 
 Run locally:            python pipeline/build.py
 Offline fixture test:   python pipeline/build.py --fixtures
+
+Published here (the rest of the field reference lives in in_season.py):
+    ta    Sleeper trending ADDS over the last 24 hours, whole number
+          (attach_trending_adds). Omitted when zero or unmatched.
 """
 import argparse
 import collections
@@ -64,6 +68,138 @@ DRIFT_BACKSTOP = 80
 UNEXPLAINED = "other/unexplained"
 
 
+def trending_adds(trending):
+    """Sleeper player_id -> adds over the trailing window, from fetch_trending.
+
+    The window is not ours to pick: sources.SLEEPER_TRENDING_URL requests
+    trending/**add** with lookback_hours=24, so every count here is ADDS over
+    the LAST 24 HOURS. That is what the published `ta` field means, and why it
+    is named for adds rather than for "trending" in general — Sleeper serves a
+    /drop board too, and a reader must not have to guess which one this is.
+
+    Malformed entries are skipped rather than raising: trending is an
+    enhancement, and a junk row from the upstream must never take a build down.
+    """
+    out = {}
+    for t in trending or []:
+        if not isinstance(t, dict):
+            continue
+        pid, count = t.get("player_id"), t.get("count")
+        if pid is None or isinstance(count, bool) or not isinstance(count, (int, float)):
+            continue
+        out[str(pid)] = int(count)
+    return out
+
+
+def attach_trending_adds(players, trending):
+    """Publish `ta` — how many Sleeper leagues added this player in 24 hours.
+
+    The pipeline has always fetched this and used it internally (the model's
+    ADP-less ordering, the drift guard's "known cause" list) without ever
+    telling the app. The app's waiver screen was therefore ranking pickups with
+    no idea which of them the rest of football was already grabbing.
+
+    Matched on `sid`, the Sleeper id we resolved at assembly. The field is
+    OMITTED — not zeroed — when the player has no `sid` (we never matched him,
+    so we have no basis for a count) or when his count is zero or absent (he is
+    not on the trending board at all). So `ta` present always means a real,
+    non-zero number of adds, and `ta` absent never has to be read as "zero adds"
+    versus "we don't know".
+
+    Returns how many players got the field.
+    """
+    adds = trending_adds(trending)
+    n = 0
+    for p in players:
+        sid = p.get("sid")
+        count = adds.get(sid) if sid else None
+        if count and count > 0:
+            p["ta"] = count
+            n += 1
+    return n
+
+
+# Waiver self-check bounds. TOP is how many hot pickups get printed; WARN_TOP
+# is how far down the warning reaches; WARN_SR is how bad our season rank has to
+# be before a pickup that hot counts as a gap worth reading in the log.
+WAIVER_CHECK_TOP = 25
+WAIVER_WARN_TOP = 10
+WAIVER_WARN_SR = 150
+
+
+def waiver_self_check(players):
+    """The market's hottest pickups, next to where our boards put them.
+
+    The failure this exists to catch has no other alarm: Bryce Young at 32 ppg
+    and Tyler Shough at 25 ppg were the most-added QBs in football while the app
+    buried them, and nothing in the build said a word. Every other guard here
+    asks whether our data is INTERNALLY consistent. This one asks the only
+    question a user actually asks on a waiver screen — is the app showing me the
+    players everyone is grabbing? — and it asks it every build, in the log, the
+    same hour the crowd moves.
+
+    Prints the top WAIVER_CHECK_TOP by 24h adds with our season rank (`sr`, what
+    has actually been produced), our projected rank (`isr`, what we expect from
+    here) and games played, then WARNS when anyone in the top WAIVER_WARN_TOP has
+    an `sr` worse than WAIVER_WARN_SR — the crowd grabbing someone our production
+    board cannot see at all.
+
+    WARNS, never aborts, and that is deliberate: trending is noisy, a hot take is
+    not a bug, and a waiver signal must never be able to keep a good rankings
+    file from publishing. Injured players are exempt entirely — when a starter
+    goes down the crowd adds his handcuff by the thousand, and a handcuff our
+    board ranks 300th is the board working, not failing.
+
+    Returns (rows, warnings): `rows` is what was printed, `warnings` the subset
+    that tripped the check.
+    """
+    hot = sorted((p for p in players if p.get("ta")),
+                 key=lambda p: (-p["ta"], p.get("ro") or 0))[:WAIVER_CHECK_TOP]
+    rows, warnings = [], []
+    for i, p in enumerate(hot, 1):
+        sr, isr = p.get("sr"), p.get("isr")
+        row = {"rank": i, "n": p["n"], "p": p.get("p"), "ta": p["ta"],
+               "sr": sr, "isr": isr, "wg": p.get("wg") or 0, "st": p.get("st")}
+        rows.append(row)
+        # A missing sr counts as worse than the threshold: "our production board
+        # does not even see him" is exactly the case being watched for.
+        unseen = sr is None or sr > WAIVER_WARN_SR
+        if i <= WAIVER_WARN_TOP and unseen and not p.get("st"):
+            warnings.append(row)
+    return rows, warnings
+
+
+def print_waiver_self_check(players):
+    """Render waiver_self_check high in the run log. Returns its warnings."""
+    rows, warnings = waiver_self_check(players)
+    if not rows:
+        print("  waiver self-check: no trending adds published "
+              "(Sleeper trending empty or nothing matched) — nothing to compare")
+        return warnings
+    print(f"  waiver self-check — top {len(rows)} by Sleeper adds (24h), "
+          f"against our boards:")
+    print(f"    {'#':>2}  {'player':24} {'pos':3} {'adds':>6} {'sr':>5} {'isr':>5} {'gp':>3}  status")
+    for r in rows:
+        mark = " <-- WARN" if r in warnings else ""
+        print(f"    {r['rank']:>2}  {r['n']:24} {r['p'] or '--':3} {r['ta']:>6} "
+              f"{r['sr'] if r['sr'] is not None else '-':>5} "
+              f"{r['isr'] if r['isr'] is not None else '-':>5} {r['wg']:>3}  "
+              f"{r['st'] or 'healthy'}{mark}")
+    if warnings:
+        print(f"  WARN: {len(warnings)} of the top {WAIVER_WARN_TOP} most-added "
+              f"player(s) rank worse than sr {WAIVER_WARN_SR} on our season board — "
+              f"the crowd is grabbing someone our production ranking does not see:")
+        for r in warnings:
+            print(f"    - {r['n']} ({r['p']}) {r['ta']} adds, "
+                  f"sr={r['sr'] if r['sr'] is not None else 'none'}, "
+                  f"isr={r['isr'] if r['isr'] is not None else 'none'}, gp={r['wg']}")
+        print("    (warning only — trending is noisy and a hot-take pickup is not a bug)")
+    else:
+        print(f"  waiver self-check: no gap — every one of the top {WAIVER_WARN_TOP} "
+              f"most-added players is inside sr {WAIVER_WARN_SR} or is injured")
+    return warnings
+
+
 def drift_guard(players, trending, nudges, injuries_live):
     """Guard #10 — market-vs-model drift. Every player we publish far from where
     the market drafts them is a claim we must be able to defend. Compare each
@@ -82,7 +218,7 @@ def drift_guard(players, trending, nudges, injuries_live):
     Returns (movers, abort_hits, allowed, adp_rank, drift_reason): `allowed` are
     the in-season top-50 players past DRIFT_ABORT that a known cause let through.
     """
-    trend_by_pid = {t["player_id"]: t["count"] for t in trending if isinstance(t, dict)}
+    trend_by_pid = trending_adds(trending)
     market = [p for p in players if p.get("os") is not None]   # real-ADP pool only
     by_adp = sorted(market, key=lambda p: p["adp"])
     adp_rank = {p["id"]: i + 1 for i, p in enumerate(by_adp)}
@@ -284,6 +420,12 @@ def main():
 
     players, adp_stat = model.assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, adp_sfx=adp_sfx)
 
+    # Additive: publish the 24h Sleeper add counts we already fetch, so the app's
+    # waiver screen can see what the rest of football is grabbing.
+    ta_n = attach_trending_adds(players, trending)
+    print(f"  trending adds: `ta` published on {ta_n}/{len(players)} players "
+          f"(from {len(trending)} trending entries, 24h adds)")
+
     # Guard 3 — is the chosen anchor usable across the draftable range? Even an
     # anchor past the count floor above can leave most of the top-N board on the
     # sentinel (few valid positions, duplicates, exclusions). Abort unless the
@@ -357,6 +499,11 @@ def main():
     print(f"  in-season rank: weekly block on {ws_filled}/{len(players)} players; "
           f"isr (projected) differs from ro on {moved_isr}, sr (season-to-date) on {moved_sr}"
           + ("" if n_complete else "  (zero completed weeks — isr == sr == ro by construction)"))
+
+    # Waiver self-check — as high in the log as it can go: it reads `sr`/`isr`,
+    # which only exist once the in-season block above has run. Everything below
+    # here is guards and enrichment, so this lands before the noise.
+    print_waiver_self_check(players)
 
     # Volume-stat spot checks. WARN-only for the first real-run review — the
     # morning pass tightens the share-sum check to an ABORT once eyeballed.
