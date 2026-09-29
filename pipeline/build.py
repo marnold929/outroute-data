@@ -7,6 +7,13 @@ Offline fixture test:   python pipeline/build.py --fixtures
 Published here (the rest of the field reference lives in in_season.py):
     ta    Sleeper trending ADDS over the last 24 hours, whole number
           (attach_trending_adds). Omitted when zero or unmatched.
+    wv / wvh / wvs   forward-looking waiver rank, PPR / half / standard
+          (waiver_rank.py). Omitted at zero completed weeks.
+
+Also written, beside the board: pipeline/state/injury_onset.json, the first
+time each currently-listed injury status was seen (injury_onset.py). CI commits
+it with docs/players.json. A dry run with a non-default --out writes it next to
+that file instead; --fixtures never writes it.
 """
 import argparse
 import collections
@@ -19,8 +26,10 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import blurbs
 import in_season
+import injury_onset
 import model
 import sources
+import waiver_rank
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SEASON_YEAR = 2026  # bump each season (also refresh pipeline/byes.json)
@@ -125,6 +134,12 @@ def attach_trending_adds(players, trending):
 WAIVER_CHECK_TOP = 25
 WAIVER_WARN_TOP = 10
 WAIVER_WARN_SR = 150
+# The same bar against our forward waiver board: a top-10 add ranked worse than
+# this on `wv` means even the forward-looking board cannot see him.
+WAIVER_WARN_WV = 150
+# A player promoted into a starting role (with live promotion credit) whose
+# `wv` is worse than this at his position: the promotion signal is not landing.
+WAIVER_WARN_PROMOTED_POS = 40
 
 
 def waiver_self_check(players):
@@ -159,18 +174,50 @@ def waiver_self_check(players):
     for i, p in enumerate(hot, 1):
         sr, isr = p.get("sr"), p.get("isr")
         row = {"rank": i, "n": p["n"], "p": p.get("p"), "ta": p["ta"],
-               "sr": sr, "isr": isr, "wg": p.get("wg") or 0, "st": p.get("st")}
+               "sr": sr, "isr": isr, "wv": p.get("wv"),
+               "wg": p.get("wg") or 0, "st": p.get("st")}
         rows.append(row)
         # A missing sr counts as worse than the threshold: "our production board
-        # does not even see him" is exactly the case being watched for.
+        # does not even see him" is exactly the case being watched for. `wv` is
+        # compared only where it is published (it is omitted at zero weeks).
         unseen = sr is None or sr > WAIVER_WARN_SR
-        if i <= WAIVER_WARN_TOP and unseen and not p.get("st"):
+        wv_unseen = row["wv"] is not None and row["wv"] > WAIVER_WARN_WV
+        if i <= WAIVER_WARN_TOP and (unseen or wv_unseen) and not p.get("st"):
+            row["why"] = [b for b, hit in (("sr", unseen), ("wv", wv_unseen)) if hit]
             warnings.append(row)
     return rows, warnings
 
 
-def print_waiver_self_check(players):
-    """Render waiver_self_check high in the run log. Returns its warnings."""
+def promoted_self_check(players, onset=None, now=None):
+    """Healthy players promoted into a starting role — live promotion credit
+    (waiver_rank.effective_roles) — whose `wv` sits worse than
+    WAIVER_WARN_PROMOTED_POS at their position. The promotion is the one
+    forward signal the backward boards cannot see; if it is not lifting the
+    player it was built for, the log should say so. Empty when `wv` is absent.
+    """
+    if not any(p.get("wv") for p in players):
+        return []
+    roles = waiver_rank.effective_roles(players, onset, now)
+    pos_rank = waiver_rank.position_rank(players, "wv")
+    out = []
+    for p in players:
+        r = roles.get(p.get("id"))
+        if not r or r["credit"] <= 0 or waiver_rank.unavailable(p):
+            continue
+        rank = pos_rank.get(p["id"])
+        if rank is not None and rank > WAIVER_WARN_PROMOTED_POS:
+            out.append({"n": p["n"], "p": p["p"], "t": p.get("t"), "wv_pos": rank,
+                        "by": r["by"], "credit": round(r["credit"], 2)})
+    return out
+
+
+def print_waiver_self_check(players, onset=None, now=None):
+    """Render waiver_self_check high in the run log. Returns its warnings
+    (the promoted-starter warnings are printed, not returned)."""
+    for w in promoted_self_check(players, onset, now):
+        print(f"  WARN: {w['n']} ({w['p']}, {w['t']}) promoted into a starting role "
+              f"({w['by']} out, credit {w['credit']}) but wv is {w['p']}{w['wv_pos']} — "
+              f"worse than {w['p']}{WAIVER_WARN_PROMOTED_POS}")
     rows, warnings = waiver_self_check(players)
     if not rows:
         print("  waiver self-check: no trending adds published "
@@ -178,25 +225,30 @@ def print_waiver_self_check(players):
         return warnings
     print(f"  waiver self-check — top {len(rows)} by Sleeper adds (24h), "
           f"against our boards:")
-    print(f"    {'#':>2}  {'player':24} {'pos':3} {'adds':>6} {'sr':>5} {'isr':>5} {'gp':>3}  status")
+    print(f"    {'#':>2}  {'player':24} {'pos':3} {'adds':>6} {'sr':>5} {'isr':>5} {'wv':>5} {'gp':>3}  status")
     for r in rows:
         mark = " <-- WARN" if r in warnings else ""
         print(f"    {r['rank']:>2}  {r['n']:24} {r['p'] or '--':3} {r['ta']:>6} "
               f"{r['sr'] if r['sr'] is not None else '-':>5} "
-              f"{r['isr'] if r['isr'] is not None else '-':>5} {r['wg']:>3}  "
+              f"{r['isr'] if r['isr'] is not None else '-':>5} "
+              f"{r['wv'] if r.get('wv') is not None else '-':>5} {r['wg']:>3}  "
               f"{r['st'] or 'healthy'}{mark}")
     if warnings:
         print(f"  WARN: {len(warnings)} of the top {WAIVER_WARN_TOP} most-added "
-              f"player(s) rank worse than sr {WAIVER_WARN_SR} on our season board — "
-              f"the crowd is grabbing someone our production ranking does not see:")
+              f"player(s) rank worse than sr {WAIVER_WARN_SR} on our season board "
+              f"or wv {WAIVER_WARN_WV} on our waiver board — "
+              f"the crowd is grabbing someone our ranking does not see:")
         for r in warnings:
             print(f"    - {r['n']} ({r['p']}) {r['ta']} adds, "
                   f"sr={r['sr'] if r['sr'] is not None else 'none'}, "
-                  f"isr={r['isr'] if r['isr'] is not None else 'none'}, gp={r['wg']}")
+                  f"isr={r['isr'] if r['isr'] is not None else 'none'}, "
+                  f"wv={r['wv'] if r.get('wv') is not None else 'none'}, gp={r['wg']} "
+                  f"[past: {', '.join(r.get('why') or ['sr'])}]")
         print("    (warning only — trending is noisy and a hot-take pickup is not a bug)")
     else:
         print(f"  waiver self-check: no gap — every one of the top {WAIVER_WARN_TOP} "
-              f"most-added players is inside sr {WAIVER_WARN_SR} or is injured")
+              f"most-added players is inside sr {WAIVER_WARN_SR} (and wv {WAIVER_WARN_WV}) "
+              f"or is injured")
     return warnings
 
 
@@ -500,10 +552,22 @@ def main():
           f"isr (projected) differs from ro on {moved_isr}, sr (season-to-date) on {moved_sr}"
           + ("" if n_complete else "  (zero completed weeks — isr == sr == ro by construction)"))
 
-    # Waiver self-check — as high in the log as it can go: it reads `sr`/`isr`,
-    # which only exist once the in-season block above has run. Everything below
+    # Injury onset, then the forward waiver rank (additive — waiver_rank.py).
+    # The onset state is updated in memory here and written only once the
+    # board itself is written, so an aborted build never advances it.
+    now = datetime.datetime.now(datetime.timezone.utc)
+    onset = injury_onset.update(injury_onset.load(), players, now)
+    wv_n = waiver_rank.attach_waiver_rank(players, n_complete, onset, now)
+    fresh = sum(1 for r in waiver_rank.effective_roles(players, onset, now).values()
+                if r["credit"] > 0 and r["dc"])
+    print(f"  waiver rank: wv/wvh/wvs on {wv_n}/{len(players)} players; "
+          f"{len(onset)} listed statuses tracked; {fresh} player(s) with live promotion credit"
+          + ("" if n_complete else "  (zero completed weeks — fields omitted)"))
+
+    # Waiver self-check — as high in the log as it can go: it reads `sr`/`isr`/
+    # `wv`, which only exist once the blocks above have run. Everything below
     # here is guards and enrichment, so this lands before the noise.
-    print_waiver_self_check(players)
+    print_waiver_self_check(players, onset, now)
 
     # Volume-stat spot checks. WARN-only for the first real-run review — the
     # morning pass tightens the share-sum check to an ABORT once eyeballed.
@@ -723,6 +787,12 @@ def main():
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(db, separators=(",", ":")))
     print(f"Wrote {out} — {len(players)} players, updated {db['meta']['updated']}")
+    if not args.fixtures:
+        default_out = pathlib.Path(ap.get_default("out"))
+        state_path = (injury_onset.STATE_PATH if out.resolve() == default_out.resolve()
+                      else out.with_name("injury_onset.json"))
+        injury_onset.save(onset, state_path)
+        print(f"Wrote {state_path} — {len(onset)} listed statuses")
 
     # quick report
     from collections import Counter
