@@ -6,7 +6,11 @@ STRICTLY ADDITIVE, like in_season.py. New fields, one per scoring format:
     wvh   waiver rank, half-PPR
     wvs   waiver rank, standard
 
-Each is a dense 1..N ranking of the whole board. All three are OMITTED at zero
+    wn    waiver note: one short reason for where he ranks (see waiver_note),
+          e.g. "RB1 with Achane out" / "41% of HOU RB touches". Omitted when
+          there is nothing worth saying.
+
+Each wv field is a dense 1..N ranking of the whole board. All four are OMITTED at zero
 completed weeks: there is nothing to have picked up yet, and a waiver board
 made of draft rank and preseason depth charts is just `ro` under a new name.
 
@@ -204,7 +208,8 @@ def effective_roles(players: list[dict], onset: dict | None = None,
         share          usage share, percent (None without a 2026 block)
         starter        eff within STARTING_SLOTS, OR share >= USAGE_STARTER
         promoted       an unavailable teammate is ahead of him (dc or ro)
-        by, age        the freshest such teammate, and his onset age in days
+        by, by_st, age the freshest such teammate, his `st`, and his onset age
+                       in days
         reach          role reached, (slots - eff + 1) / slots, when promoted
                        into a starting slot by depth; else 0
         credit         reach x freshness(age) — the promotion component
@@ -252,7 +257,8 @@ def effective_roles(players: list[dict], onset: dict | None = None,
                 "starter": bool((eff is not None and eff <= slots) or usage_starter),
                 "usage_starter": usage_starter,
                 "promoted": bool(ahead),
-                "by": best["n"] if best else None, "age": best_age,
+                "by": best["n"] if best else None,
+                "by_st": best.get("st") if best else None, "age": best_age,
                 "reach": reach,
                 "credit": reach * max(0.0, best_fresh),
             }
@@ -339,9 +345,66 @@ def waiver_slots(players: list[dict], comps: dict[str, dict]) -> dict[str, float
     return slots
 
 
+# WAIVER NOTE (`wn`) — one short reason, first match wins:
+#   1. promotion credit >= NOTE_PROMOTED_MIN_CREDIT
+#          "RB1 with Achane out"  (role reached + injured teammate's last name
+#                                  + his status, NOTE_STATUS)
+#   2. starter-level usage share (USAGE_STARTER)
+#          RB  "41% of HOU RB touches"     WR/TE  "23% target share"
+# Nothing market-based: the app already shows the adds chip. Never on an
+# unavailable player (he ranks at the bottom whatever the reason says). Never
+# longer than NOTE_MAX_CHARS; only the name is ever shortened.
+NOTE_PROMOTED_MIN_CREDIT = 0.5    # same bar as the self-check's promoted warning
+NOTE_MAX_CHARS = 30
+# The ahead-of-him teammate is always UNAVAILABLE (effective_roles), so in
+# practice this reads "on IR" or "out"; "doubtful" is kept for completeness.
+NOTE_STATUS = {"IR": "on IR", "Doubtful": "doubtful"}   # anything else: "out"
+_NAME_SUFFIXES = {"jr", "jr.", "sr", "sr.", "ii", "iii", "iv", "v"}
+_NAME_PARTICLES = {"st.", "st", "van", "von", "de", "del", "la", "le", "da", "mc"}
+
+
+def last_name(full: str | None) -> str:
+    """'De'Von Achane' -> 'Achane'; 'Amon-Ra St. Brown' -> 'St. Brown';
+    'Kenneth Walker III' -> 'Walker'."""
+    parts = (full or "").split()
+    while len(parts) > 1 and parts[-1].lower() in _NAME_SUFFIXES:
+        parts.pop()
+    if not parts:
+        return ""
+    if len(parts) >= 3 and parts[-2].lower() in _NAME_PARTICLES:
+        return f"{parts[-2]} {parts[-1]}"
+    return parts[-1]
+
+
+def _fit_name(prefix: str, name: str, suffix: str) -> str:
+    """prefix + name + suffix in NOTE_MAX_CHARS, shortening only the name
+    (with a trailing ellipsis)."""
+    room = NOTE_MAX_CHARS - len(prefix) - len(suffix)
+    if len(name) > room:
+        name = name[:max(0, room - 1)].rstrip() + "\u2026"
+    return prefix + name + suffix
+
+
+def waiver_note(p: dict, role: dict | None) -> str | None:
+    """The `wn` string for one player, or None (see WAIVER NOTE above)."""
+    if not role or unavailable(p):
+        return None
+    pos = p.get("p")
+    if role["credit"] >= NOTE_PROMOTED_MIN_CREDIT and role["eff"] and role["by"]:
+        status = NOTE_STATUS.get(role.get("by_st"), "out")
+        return _fit_name(f"{pos}{role['eff']} with ", last_name(role["by"]),
+                         f" {status}")
+    if role.get("usage_starter"):
+        pct = f"{round(role['share'])}%"
+        if pos == "RB":
+            return f"{pct} of {p.get('t')} RB touches"[:NOTE_MAX_CHARS]
+        return f"{pct} target share"
+    return None
+
+
 def attach_waiver_rank(players: list[dict], weeks_complete: int,
                        onset: dict | None = None, now=None) -> int:
-    """Publish wv / wvh / wvs. Omitted (and any stale copy removed) at zero
+    """Publish wv / wvh / wvs and wn. Omitted (and any stale copy removed) at zero
     completed weeks. Returns how many players got the fields.
 
     The overall order is (unavailable last, slot, ro): the fold keeps an Out
@@ -352,8 +415,15 @@ def attach_waiver_rank(players: list[dict], weeks_complete: int,
         for p in players:
             for field, _ in FIELDS:
                 p.pop(field, None)
+            p.pop("wn", None)
         return 0
     roles = effective_roles(players, onset, now)
+    for p in players:
+        note = waiver_note(p, roles.get(p["id"]))
+        if note:
+            p["wn"] = note
+        else:
+            p.pop("wn", None)
     for field, source in FIELDS:
         comps = components(players, source, roles=roles)
         slots = waiver_slots(players, comps)

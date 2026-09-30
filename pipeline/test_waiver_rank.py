@@ -361,6 +361,108 @@ class SelfCheckExtension(unittest.TestCase):
         players = [_p("Starter", ro=5, dc=1, st="Out"), _p("Backup", ro=300, dc=2)]
         self.assertEqual(build.promoted_self_check(players, {}, NOW), [])
 
+class WaiverNote(unittest.TestCase):
+    def _promoted(self, st, name="Starter"):
+        players = [_p(name, ro=20, dc=1, st=st), _p("Backup", ro=150, dc=2)]
+        role = _roles(players)[players[1]["id"]]
+        return waiver_rank.waiver_note(players[1], role)
+
+    def test_promotion_wording_per_status(self):
+        self.assertEqual(self._promoted("Out", "Tom Achane"), "RB1 with Achane out")
+        self.assertEqual(self._promoted("IR", "Tom Achane"), "RB1 with Achane on IR")
+        self.assertEqual(self._promoted("PUP", "Tom Achane"), "RB1 with Achane out")
+        # A doubtful teammate never promotes him (not UNAVAILABLE), so the
+        # wording is exercised directly.
+        role = {"credit": 1.0, "eff": 1, "by": "Tom Achane", "by_st": "Doubtful"}
+        self.assertEqual(waiver_rank.waiver_note(_p("B"), role),
+                         "RB1 with Achane doubtful")
+
+    def test_promotion_uses_role_reached(self):
+        players = [_p("A One", pos="WR", ro=10, dc=1, st="IR"),
+                   _p("B Two", pos="WR", ro=20, dc=2),
+                   _p("C Three", pos="WR", ro=30, dc=3)]
+        roles = _roles(players)
+        self.assertEqual(waiver_rank.waiver_note(players[1], roles[players[1]["id"]]),
+                         "WR1 with One on IR")
+        self.assertEqual(waiver_rank.waiver_note(players[2], roles[players[2]["id"]]),
+                         "WR2 with One on IR")
+
+    def test_low_credit_promotion_has_no_note(self):
+        # RB2 reach 0.5 x stale injury -> credit below 0.5; no usage either.
+        players = [_p("Hurt", ro=20, dc=1, st="Out", sid="h1"),
+                   _p("Lead", ro=40, dc=2), _p("Next", ro=150, dc=3)]
+        onset = {"h1": {"status": "Out", "first_seen": days_ago(14)}}
+        role = _roles(players, onset)[players[2]["id"]]
+        self.assertLess(role["credit"], 0.5)
+        self.assertIsNone(waiver_rank.waiver_note(players[2], role))
+
+    def test_last_name(self):
+        ln = waiver_rank.last_name
+        self.assertEqual(ln("De'Von Achane"), "Achane")
+        self.assertEqual(ln("Amon-Ra St. Brown"), "St. Brown")
+        self.assertEqual(ln("Kenneth Walker III"), "Walker")
+        self.assertEqual(ln("Marvin Harrison Jr."), "Harrison")
+
+    def test_usage_wording_rb(self):
+        a = _p("A", t="HOU", ro=100, us="2026 wk1-3", wg=3, uc=15, ut=5)
+        b = _p("B", t="HOU", ro=200, us="2026 wk1-3", wg=3, uc=10, ut=0)
+        roles = _roles([a, b])
+        self.assertEqual(waiver_rank.waiver_note(a, roles[a["id"]]),
+                         "67% of HOU RB touches")
+        self.assertEqual(waiver_rank.waiver_note(b, roles[b["id"]]),
+                         "33% of HOU RB touches")
+
+    def test_usage_wording_wr_te(self):
+        wr = _p("W", pos="WR", ro=200, us="2026 wk1-3", uts=23.4)
+        te = _p("T", pos="TE", t="BBB", ro=200, us="2026 wk1-3", uts=14.6)
+        roles = _roles([wr, te])
+        self.assertEqual(waiver_rank.waiver_note(wr, roles[wr["id"]]), "23% target share")
+        self.assertEqual(waiver_rank.waiver_note(te, roles[te["id"]]), "15% target share")
+
+    def test_promotion_wins_over_usage(self):
+        players = [_p("Hurt Guy", ro=20, dc=1, st="Out"),
+                   _p("Back", ro=150, dc=2, us="2026 wk1-3", wg=3, uc=10, ut=5)]
+        role = _roles(players)[players[1]["id"]]
+        self.assertTrue(role["usage_starter"])
+        self.assertEqual(waiver_rank.waiver_note(players[1], role), "RB1 with Guy out")
+
+    def test_omitted_when_neither_applies(self):
+        players = _board()
+        players.append(_p("LowWR", pos="WR", t="BBB", ro=300, us="2026 wk1-3", uts=5.0))
+        waiver_rank.attach_waiver_rank(players, 3, {}, NOW)
+        by = {p["n"]: p for p in players}
+        self.assertEqual(by["Backup"]["wn"], "RB1 with Starter out")
+        self.assertEqual(by["Third"]["wn"], "RB2 with Starter out")   # credit 0.5
+        self.assertEqual(by["CCC2"]["wn"], "RB1 with IRstar on IR")
+        for n in ("Healthy1", "Healthy2", "QB1", "K1", "LowWR", "Starter", "IRstar"):
+            self.assertNotIn("wn", by[n], n)
+
+    def test_unavailable_player_gets_no_note(self):
+        players = [_p("Hurt", ro=20, dc=1, st="Out"), _p("Back", ro=150, dc=2, st="IR")]
+        waiver_rank.attach_waiver_rank(players, 3, {}, NOW)
+        self.assertNotIn("wn", players[1])
+
+    def test_zero_weeks_removes_stale_note(self):
+        players = _board()
+        players[1]["wn"] = "stale"
+        waiver_rank.attach_waiver_rank(players, 0, {}, NOW)
+        self.assertTrue(all("wn" not in p for p in players))
+
+    def test_never_longer_than_30_truncating_the_name(self):
+        long = "Maximiliano Bartholomew-Vanderhoffenstein"
+        for st in ("Out", "IR"):
+            note = self._promoted(st, long)
+            self.assertLessEqual(len(note), 30, note)
+            self.assertTrue(note.startswith("RB1 with Bartholomew"), note)
+            self.assertTrue(note.endswith("\u2026 out") or note.endswith("\u2026 on IR"), note)
+        role = {"credit": 1.0, "eff": 1, "by": long, "by_st": "Doubtful"}
+        note = waiver_rank.waiver_note(_p("B"), role)
+        self.assertEqual(len(note), 30)
+        self.assertTrue(note.endswith(" doubtful"))
+        # usage notes never need it, but are capped all the same
+        a = _p("A", t="HOU", ro=100, us="2026 wk1-3", wg=3, uc=15, ut=5)
+        self.assertLessEqual(len(waiver_rank.waiver_note(a, _roles([a])[a["id"]])), 30)
+
 
 if __name__ == "__main__":
     unittest.main()
