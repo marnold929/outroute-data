@@ -1,7 +1,7 @@
 {
  "10222": {
   "first_seen": "2026-09-20T17:27:42Z",
-  "status": "Out"
+  "status": "IR"
  },
  "10226": {
   "first_seen": "2026-09-23T19:40:57Z",
@@ -31,6 +31,10 @@
   "first_seen": "2026-09-20T20:46:36Z",
   "status": "IR"
  },
+ "11584": {
+  "first_seen": "2026-09-30T22:12:22Z",
+  "status": "Questionable"
+ },
  "11596": {
   "first_seen": "2026-09-30T20:49:06Z",
   "status": "Questionable"
@@ -47,6 +51,10 @@
   "first_seen": "2026-09-24T19:59:31Z",
   "status": "Doubtful"
  },
+ "11637": {
+  "first_seen": "2026-09-30T22:12:22Z",
+  "status": "Questionable"
+ },
  "11643": {
   "first_seen": "2026-09-20T22:26:45Z",
   "status": "Questionable"
@@ -57,6 +65,10 @@
  },
  "11655": {
   "first_seen": "2026-09-30T20:49:06Z",
+  "status": "Questionable"
+ },
+ "12171": {
+  "first_seen": "2026-09-30T22:12:22Z",
   "status": "Questionable"
  },
  "12469": {
@@ -111,6 +123,10 @@
   "first_seen": "2026-09-16T02:50:48Z",
   "status": "IR"
  },
+ "13311": {
+  "first_seen": "2026-09-30T22:12:22Z",
+  "status": "Questionable"
+ },
  "13330": {
   "first_seen": "2026-09-30T20:49:06Z",
   "status": "Questionable"
@@ -151,6 +167,10 @@
   "first_seen": "2026-09-20T22:26:45Z",
   "status": "IR"
  },
+ "4037": {
+  "first_seen": "2026-09-30T22:12:22Z",
+  "status": "Questionable"
+ },
  "4054": {
   "first_seen": "2026-09-30T20:49:06Z",
   "status": "Questionable"
@@ -175,8 +195,8 @@
   "first_seen": "2026-09-28T00:42:22Z",
   "status": "Out"
  },
- "4984": {
-  "first_seen": "2026-09-28T23:14:13Z",
+ "4983": {
+  "first_seen": "2026-09-30T22:12:22Z",
   "status": "Questionable"
  },
  "5008": {
@@ -243,8 +263,8 @@
   "first_seen": "2026-09-20T18:48:17Z",
   "status": "Out"
  },
- "7526": {
-  "first_seen": "2026-09-29T23:44:06Z",
+ "7204": {
+  "first_seen": "2026-09-30T22:12:22Z",
   "status": "Questionable"
  },
  "7543": {
@@ -314,6 +334,10 @@
  "8423": {
   "first_seen": "2026-09-16T02:50:48Z",
   "status": "IR"
+ },
+ "8484": {
+  "first_seen": "2026-09-30T22:12:22Z",
+  "status": "Questionable"
  },
  "8698": {
   "first_seen": "2026-09-11T04:41:46Z",
