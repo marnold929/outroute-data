@@ -140,6 +140,10 @@ WAIVER_WARN_WV = 150
 # A player promoted into a starting role (with live promotion credit) whose
 # `wv` is worse than this at his position: the promotion signal is not landing.
 WAIVER_WARN_PROMOTED_POS = 40
+# ...counting only promotions with at least this much credit. Below it the
+# promotion is a secondary role (WR3, RB2) or a fading one, and is not meant to
+# carry the player on its own — warning on those was 11 lines of noise a build.
+WAIVER_WARN_PROMOTED_MIN_CREDIT = 0.5
 
 
 def waiver_self_check(players):
@@ -189,8 +193,8 @@ def waiver_self_check(players):
 
 
 def promoted_self_check(players, onset=None, now=None):
-    """Healthy players promoted into a starting role — live promotion credit
-    (waiver_rank.effective_roles) — whose `wv` sits worse than
+    """Healthy players promoted into a starting role — promotion credit of at
+    least WAIVER_WARN_PROMOTED_MIN_CREDIT (waiver_rank.effective_roles) — whose `wv` sits worse than
     WAIVER_WARN_PROMOTED_POS at their position. The promotion is the one
     forward signal the backward boards cannot see; if it is not lifting the
     player it was built for, the log should say so. Empty when `wv` is absent.
@@ -202,7 +206,8 @@ def promoted_self_check(players, onset=None, now=None):
     out = []
     for p in players:
         r = roles.get(p.get("id"))
-        if not r or r["credit"] <= 0 or waiver_rank.unavailable(p):
+        if (not r or r["credit"] < WAIVER_WARN_PROMOTED_MIN_CREDIT
+                or waiver_rank.unavailable(p)):
             continue
         rank = pos_rank.get(p["id"])
         if rank is not None and rank > WAIVER_WARN_PROMOTED_POS:

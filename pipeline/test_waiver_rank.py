@@ -185,6 +185,42 @@ class UsageRole(unittest.TestCase):
         self.assertFalse(roles[low["id"]]["starter"])
 
 
+class UsageContinuous(unittest.TestCase):
+    def _score(self, share, pos="RB"):
+        p = {"p": pos}
+        return waiver_rank.usage_score(p, {"share": share})
+
+    def test_scales_to_the_reference_and_saturates(self):
+        ref = waiver_rank.USAGE_STARTER["RB"]
+        self.assertEqual(self._score(0.0), 0.0)
+        self.assertAlmostEqual(self._score(ref / 2), 0.5)
+        self.assertEqual(self._score(ref), 1.0)
+        self.assertEqual(self._score(ref * 2), 1.0)
+
+    def test_no_in_season_block_scores_zero(self):
+        self.assertEqual(self._score(None), 0.0)
+        self.assertEqual(waiver_rank.usage_score({"p": "RB"}, None), 0.0)
+
+    def test_weight_rules(self):
+        # RB1 promotion dominates a full share; a secondary promotion does not.
+        self.assertGreater(waiver_rank.W_PROMOTED * 1.0, waiver_rank.W_USAGE)
+        self.assertLess(waiver_rank.W_PROMOTED * 0.5, waiver_rank.W_USAGE)
+
+    def test_established_share_outranks_secondary_promotion_with_no_usage(self):
+        # Team A: RB1 healthy, RB2 Out, RB3 (0 touches) promoted to RB2.
+        # Team B: committee RB2 with a starter-level share, no promotion.
+        u = dict(us="2026 wk1-3", wg=3)
+        players = [
+            _p("A1", t="A", ro=10, dc=1, uc=15, ut=3, **u),
+            _p("A2", t="A", ro=40, dc=2, st="Out", uc=8, ut=2, **u),
+            _p("Promoted", t="A", ro=300, dc=3, sr=300, uc=0, ut=0, **u),
+            _p("B1", t="B", ro=20, dc=1, uc=12, ut=2, **u),
+            _p("Committee", t="B", ro=300, dc=2, sr=300, uc=8, ut=2, **u),
+        ]
+        comps = waiver_rank.components(players, "sr", {}, NOW)
+        self.assertGreater(comps[players[4]["id"]]["score"], comps[players[2]["id"]]["score"])
+
+
 class Market(unittest.TestCase):
     def test_ta_absent_is_zero(self):
         players = [_p("NoTa", ro=100), _p("Ta", t="B", ro=100, ta=500)]
@@ -315,6 +351,11 @@ class SelfCheckExtension(unittest.TestCase):
     def test_promoted_starter_inside_top40_does_not_warn(self):
         players = self._promoted_board(build.WAIVER_WARN_PROMOTED_POS)
         self.assertEqual(build.promoted_self_check(players, {}, NOW), [])
+
+    def test_low_credit_promotion_does_not_warn(self):
+        players = self._promoted_board(build.WAIVER_WARN_PROMOTED_POS + 1)
+        onset = {players[0]["sid"]: {"status": "Out", "first_seen": days_ago(15)}}  # credit 0.43
+        self.assertEqual(build.promoted_self_check(players, onset, NOW), [])
 
     def test_no_wv_no_promoted_check(self):
         players = [_p("Starter", ro=5, dc=1, st="Out"), _p("Backup", ro=300, dc=2)]

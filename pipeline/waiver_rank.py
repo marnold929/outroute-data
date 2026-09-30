@@ -86,9 +86,18 @@ STARTING_SLOTS = {"QB": 1, "RB": 2, "WR": 3, "TE": 1}
 PROMO_FRESH_DAYS = 7.0
 PROMO_STALE_DAYS = 21.0
 
-# USAGE_STARTER — a usage share at or above this counts as holding a starting
-# role even with no depth-chart slot or promotion to show for it: coaches'
-# snaps say more than Sleeper's chart. Read only from a 2026 in-season usage
+# USAGE_STARTER — the starter-level usage share per position. Two jobs:
+#   * the scaling reference for the CONTINUOUS usage component,
+#         usage = min(1, share / USAGE_STARTER[pos])
+#     so a starter-level share scores 1.0, half of it 0.5, none 0.0. Usage is
+#     proof and promotion is a forecast: a committee back with 41% of the
+#     touches has shown the role, a backup promoted to RB2 with 0% has not, and
+#     a yes/no input could not tell them apart. It saturates at the reference:
+#     above starter level the extra volume already shows up in production.
+#   * a share at or above it counts as holding a starting role (the `role`
+#     component) even with no depth-chart slot or promotion to show for it:
+#     coaches' snaps say more than Sleeper's chart.
+# Read only from a 2026 in-season usage
 # block (`us` starting "2026"); a last-season carryover says nothing about
 # this year's role.
 #   RB  his share of his team's RB touches (carries + targets), percent, over
@@ -123,6 +132,14 @@ USAGE_WINDOW_GAMES = 3            # model.attach_usage's last-3-played window
 # the hour news breaks, and it also chases one big game. Weighted below
 # production so a hot take cannot outrank a player who is actually scoring.
 #
+# W_USAGE: the usage component (see USAGE_STARTER). Placed by two rules:
+#   * promotion INTO the top slot stays dominant:  W_PROMOTED x 1.0 > W_USAGE
+#   * a secondary promotion (credit <= 0.5) must not by itself outrank an
+#     established starter-level share:              W_PROMOTED x 0.5 < W_USAGE
+# so W_USAGE sits inside (0.20, 0.40); 0.30 is the middle, leaving the same
+# 0.10 margin on each side for the noisier terms (market, production) to move
+# within without flipping either rule on their own.
+#
 # W_ROLE: standing in a starting role at all — by effective depth or by usage
 # share (USAGE_STARTER), promoted or not. Small: most
 # starters are already rostered and this mainly separates a healthy starter
@@ -130,6 +147,7 @@ USAGE_WINDOW_GAMES = 3            # model.attach_usage's last-3-played window
 W_PROMOTED = 0.40
 W_PRODUCTION = 0.30
 W_MARKET = 0.20
+W_USAGE = 0.30
 W_ROLE = 0.10
 
 # Positions scored (and folded) independently.
@@ -272,6 +290,15 @@ def production_scores(players: list[dict], field: str) -> dict[str, float]:
     return out
 
 
+def usage_score(p: dict, role: dict | None) -> float:
+    """min(1, share / USAGE_STARTER[pos]); 0.0 with no 2026 usage block."""
+    ref = USAGE_STARTER.get(p.get("p"))
+    share = role.get("share") if role else None
+    if not ref or share is None:
+        return 0.0
+    return min(1.0, max(0.0, share) / ref)
+
+
 def components(players: list[dict], field: str, onset: dict | None = None,
                now=None, roles: dict | None = None) -> dict[str, dict]:
     """id -> every score component and the combined score, for one format."""
@@ -284,13 +311,15 @@ def components(players: list[dict], field: str, onset: dict | None = None,
         c = {
             "prod": prod.get(p["id"], 0.0),
             "market": market.get(p["id"], 0.0),
+            "usage": usage_score(p, r),
             "role": 1.0 if r and r["starter"] else 0.0,
             "promoted": r["credit"] if r else 0.0,
             "doubtful": DOUBTFUL_PENALTY if p.get("st") == "Doubtful" else 0.0,
             "unavailable": unavailable(p),
         }
         c["score"] = (W_PROMOTED * c["promoted"] + W_PRODUCTION * c["prod"]
-                      + W_MARKET * c["market"] + W_ROLE * c["role"] - c["doubtful"])
+                      + W_MARKET * c["market"] + W_USAGE * c["usage"]
+                      + W_ROLE * c["role"] - c["doubtful"])
         out[p["id"]] = c
     return out
 
