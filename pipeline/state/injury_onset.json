@@ -55,10 +55,6 @@
   "first_seen": "2026-10-05T00:53:52Z",
   "status": "PUP"
  },
- "12171": {
-  "first_seen": "2026-09-30T22:12:22Z",
-  "status": "IR"
- },
  "12469": {
   "first_seen": "2026-09-16T02:50:48Z",
   "status": "IR"
@@ -286,10 +282,6 @@
  "7593": {
   "first_seen": "2026-09-16T02:50:48Z",
   "status": "IR"
- },
- "7595": {
-  "first_seen": "2026-09-28T23:14:13Z",
-  "status": "Questionable"
  },
  "8127": {
   "first_seen": "2026-09-21T00:14:16Z",
