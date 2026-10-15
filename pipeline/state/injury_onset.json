@@ -27,10 +27,6 @@
   "first_seen": "2026-10-04T19:38:06Z",
   "status": "IR"
  },
- "11560": {
-  "first_seen": "2026-09-20T20:46:36Z",
-  "status": "Questionable"
- },
  "11577": {
   "first_seen": "2026-10-11T16:18:30Z",
   "status": "Doubtful"
@@ -330,6 +326,10 @@
  "6865": {
   "first_seen": "2026-10-15T00:30:42Z",
   "status": "Questionable"
+ },
+ "6904": {
+  "first_seen": "2026-10-15T19:53:21Z",
+  "status": "Out"
  },
  "7021": {
   "first_seen": "2026-09-20T18:48:17Z",
