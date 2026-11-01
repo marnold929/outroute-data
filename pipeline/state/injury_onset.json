@@ -11,10 +11,6 @@
   "first_seen": "2026-09-23T19:40:57Z",
   "status": "IR"
  },
- "10236": {
-  "first_seen": "2026-10-28T22:31:15Z",
-  "status": "Questionable"
- },
  "10867": {
   "first_seen": "2026-09-22T14:50:18Z",
   "status": "IR"
@@ -30,6 +26,10 @@
  "11370": {
   "first_seen": "2026-10-04T19:38:06Z",
   "status": "IR"
+ },
+ "11579": {
+  "first_seen": "2026-11-01T16:47:38Z",
+  "status": "Out"
  },
  "11583": {
   "first_seen": "2026-09-20T20:46:36Z",
@@ -70,6 +70,10 @@
  "12481": {
   "first_seen": "2026-10-25T22:33:49Z",
   "status": "Questionable"
+ },
+ "12486": {
+  "first_seen": "2026-11-01T16:47:38Z",
+  "status": "Out"
  },
  "12487": {
   "first_seen": "2026-09-28T05:25:06Z",
@@ -135,6 +139,10 @@
   "first_seen": "2026-10-28T01:18:11Z",
   "status": "IR"
  },
+ "13402": {
+  "first_seen": "2026-11-01T16:47:38Z",
+  "status": "Out"
+ },
  "13415": {
   "first_seen": "2026-10-30T05:50:27Z",
   "status": "Out"
@@ -179,14 +187,6 @@
   "first_seen": "2026-10-04T19:38:06Z",
   "status": "IR"
  },
- "4981": {
-  "first_seen": "2026-10-21T20:09:57Z",
-  "status": "Questionable"
- },
- "4983": {
-  "first_seen": "2026-10-04T19:38:06Z",
-  "status": "Questionable"
- },
  "5121": {
   "first_seen": "2026-10-04T19:38:06Z",
   "status": "IR"
@@ -210,10 +210,6 @@
  "5927": {
   "first_seen": "2026-10-20T04:51:39Z",
   "status": "IR"
- },
- "5947": {
-  "first_seen": "2026-10-28T21:05:38Z",
-  "status": "Questionable"
  },
  "5973": {
   "first_seen": "2026-09-28T00:42:22Z",
@@ -315,10 +311,6 @@
   "first_seen": "2026-10-29T05:49:14Z",
   "status": "Questionable"
  },
- "8137": {
-  "first_seen": "2026-10-29T05:49:14Z",
-  "status": "Questionable"
- },
  "8142": {
   "first_seen": "2026-09-21T04:57:07Z",
   "status": "IR"
@@ -329,7 +321,7 @@
  },
  "8155": {
   "first_seen": "2026-09-27T19:46:15Z",
-  "status": "Questionable"
+  "status": "Out"
  },
  "8167": {
   "first_seen": "2026-10-30T05:50:27Z",
