@@ -548,8 +548,14 @@ def main():
     ws_agg, ws_last, last_week = in_season.aggregate_completed(
         weeks_stats, sleeper, completed_weeks)
     n_complete = len(completed_weeks)
+    # Injury onset first: the projected boards read it (in_season LONG INJURY)
+    # as well as the waiver rank below. The state is updated in memory here and
+    # written only once the board itself is written, so an aborted build never
+    # advances it.
+    now = datetime.datetime.now(datetime.timezone.utc)
+    onset = injury_onset.update(injury_onset.load(), players, now)
     ws_filled, prod_weight = in_season.attach_in_season(
-        players, ws_agg, ws_last, n_complete, completed_weeks)
+        players, ws_agg, ws_last, n_complete, completed_weeks, onset, now)
     print(f"  in-season: {n_complete} completed week(s) of {SEASON_YEAR} "
           f"(complete: {sorted(completed_weeks) or '-'}), "
           f"full-attendance production weight {prod_weight:.2f}")
@@ -559,11 +565,7 @@ def main():
           f"isr (projected) differs from ro on {moved_isr}, sr (season-to-date) on {moved_sr}"
           + ("" if n_complete else "  (zero completed weeks — isr == sr == ro by construction)"))
 
-    # Injury onset, then the forward waiver rank (additive — waiver_rank.py).
-    # The onset state is updated in memory here and written only once the
-    # board itself is written, so an aborted build never advances it.
-    now = datetime.datetime.now(datetime.timezone.utc)
-    onset = injury_onset.update(injury_onset.load(), players, now)
+    # The forward waiver rank (additive — waiver_rank.py), on the onset above.
     wv_n = waiver_rank.attach_waiver_rank(players, n_complete, onset, now)
     fresh = sum(1 for r in waiver_rank.effective_roles(players, onset, now).values()
                 if r["credit"] > 0 and r["dc"])

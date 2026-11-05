@@ -34,18 +34,20 @@ class Weighting(unittest.TestCase):
         self.assertEqual(in_season.production_weight(0), 0.0)
         self.assertEqual(in_season.production_weight(None), 0.0)
 
-    def test_the_four_documented_week_counts(self):
+    def test_the_documented_week_counts(self):
         # The table in the module's constant block must stay true.
-        self.assertAlmostEqual(in_season.production_weight(1), 1 / 10, places=4)
-        self.assertAlmostEqual(in_season.production_weight(4), 4 / 13, places=4)
-        self.assertAlmostEqual(in_season.production_weight(10), 10 / 19, places=4)
+        self.assertAlmostEqual(in_season.production_weight(1), 1 / 4, places=4)
+        self.assertAlmostEqual(in_season.production_weight(4), 4 / 7, places=4)
+        self.assertAlmostEqual(in_season.production_weight(8), 8 / 11, places=4)
+        self.assertAlmostEqual(in_season.production_weight(17), in_season.PROD_WEIGHT_MAX)
+        self.assertLess(in_season.production_weight(16), in_season.PROD_WEIGHT_MAX)
 
     def test_rises_with_completed_weeks_then_caps(self):
         ws = [in_season.production_weight(n) for n in range(0, 19)]
         self.assertEqual(ws, sorted(ws))                      # never decreases
         self.assertLessEqual(max(ws), in_season.PROD_WEIGHT_MAX)
         self.assertEqual(in_season.production_weight(18), in_season.PROD_WEIGHT_MAX)
-        self.assertLess(in_season.production_weight(1), 0.15)  # week 1 barely moves
+        self.assertLess(in_season.production_weight(1), 0.5)   # week 1 is not a takeover
 
 
 class ZeroWeeksChangesNothing(unittest.TestCase):
@@ -104,7 +106,8 @@ class PublishedBlock(unittest.TestCase):
         in_season.attach_in_season(players, agg, {"3": (20.0, 18.0, 16.0)},
                                    weeks_complete=4)
         self.assertEqual(set(p) - market_keys,
-                         {"isr", "ish", "iss", "sr", "srh", "srs", "wg", "wpg", "whg", "wsg", "wlp", "wlh", "wls"})
+                         {"isr", "ish", "iss", "sr", "srh", "srs", "rf", "rfh", "rfs",
+                          "wg", "wpg", "whg", "wsg", "wlp", "wlh", "wls"})
 
     def test_isr_is_a_dense_ranking(self):
         players = _players(40)
@@ -148,7 +151,7 @@ class BlendBehaviour(unittest.TestCase):
         self.assertGreaterEqual(rbs[-1]["isr"], rbs[0]["ro"])
 
 
-BOARDS = ("isr", "ish", "iss", "sr", "srh", "srs")
+BOARDS = ("isr", "ish", "iss", "sr", "srh", "srs", "rf", "rfh", "rfs")
 
 
 def _fmt_agg(ppg_by_sid, games):
@@ -217,7 +220,7 @@ class TravelCap(unittest.TestCase):
         self.assertEqual(slot, 400.0)                      # the slot itself is never clamped
         w = in_season.production_weight(1)
         blended = (1 - w) * star["ro"] + w * slot
-        self.assertAlmostEqual(blended, 43.6)              # the blend, on the raw slot
+        self.assertAlmostEqual(blended, 103.0)             # the blend, on the raw slot
         # ro 4: the floor gives him 10 spots a week, not 0.8.
         self.assertEqual(in_season.max_travel(star["ro"], 1), 10.0)
         self.assertEqual(in_season.clamp_travel(blended, star["ro"], 1), 14.0)
@@ -228,7 +231,7 @@ class TravelCap(unittest.TestCase):
 
     def test_the_blend_itself_is_undamped(self):
         # No second damper: with the cap effectively off, the rank is the rank
-        # of the raw blended value (43.6), not of a clamped slot.
+        # of the raw blended value (103), not of a clamped slot.
         with mock.patch.object(in_season, "ISR_TRAVEL_PER_WEEK", 10_000.0):
             _, _, star, _ = self._board(1)
         self.assertGreater(star["isr"] - star["ro"], 35)
@@ -301,20 +304,33 @@ class TravelBandShape(unittest.TestCase):
 
 
 class BelowTheFloorOnAllBoards(unittest.TestCase):
-    def test_keeps_his_ro_slot_everywhere(self):
-        # 10 weeks: floor is 5 games. RB-last has 3 games at an absurd rate in
-        # every format; every other RB produces in market order.
+    def _board(self, games):
+        # 10 weeks: the season floor is 5 games, the form floor 2. RB-last has
+        # `games` games at an absurd rate in every format; every other RB
+        # produces in market order.
         players = _players(40)
         rbs = [p for p in players if p["p"] == "RB"]
         ppg = {p["sid"]: (100.0 - p["ro"],) * 3 for p in rbs}
         agg = _fmt_agg(ppg, games=10)
         hurt = rbs[-1]
-        agg[hurt["sid"]] = {"g": 3, "ppr": 3 * 999.0, "half": 3 * 999.0, "std": 3 * 999.0}
-        for fmt in ("ppr", "half", "std"):
-            self.assertEqual(in_season.production_slots(players, agg, 10, fmt)[hurt["id"]], float(hurt["ro"]), fmt)
+        agg[hurt["sid"]] = {"g": games, "ppr": games * 999.0, "half": games * 999.0,
+                            "std": games * 999.0}
         in_season.attach_in_season(players, agg, {}, weeks_complete=10)
+        return rbs, hurt
+
+    def test_one_game_keeps_his_ro_slot_everywhere(self):
+        rbs, hurt = self._board(1)
         for field in BOARDS:
             self.assertEqual(hurt[field], hurt["ro"], field)
+
+    def test_three_games_season_boards_wait_form_boards_do_not(self):
+        rbs, hurt = self._board(3)
+        for field in ("sr", "srh", "srs"):
+            self.assertEqual(hurt[field], hurt["ro"], field)          # below 5 of 10
+        for field in ("rf", "rfh", "rfs"):
+            self.assertEqual(hurt[field], rbs[0]["ro"], field)        # RB1's slot
+        for field in ("isr", "ish", "iss"):
+            self.assertLess(hurt[field], hurt["ro"], field)
 
 
 class PlayerGamesWeighting(unittest.TestCase):
@@ -338,11 +354,21 @@ class PlayerGamesWeighting(unittest.TestCase):
             w = in_season.production_weight(n)
             self.assertEqual(in_season.player_weight(w, n, n), w)            # every week
             if n:
-                half = in_season.player_weight(w, max(1, n // 2), n)
-                self.assertAlmostEqual(half, w * (max(1, n // 2) / n) ** in_season.PROD_GAMES_EXPONENT)
+                g = max(1, n // 2)
+                window = min(g, 4) / min(n, 4)
+                half = in_season.player_weight(w, g, n)
+                self.assertAlmostEqual(half, w * window ** in_season.PROD_GAMES_EXPONENT)
                 self.assertLessEqual(half, w)
             self.assertEqual(in_season.player_weight(w, 0, n), 0.0)          # no games
         self.assertEqual(in_season.player_weight(0.0, 5, 5), 0.0)            # zero weeks
+
+    def test_a_full_form_window_is_full_weight_however_many_he_missed(self):
+        # 4 of 10 played: four games behind him is a full window. Missing the
+        # other six is charged by his status while listed, not here as well.
+        w = in_season.production_weight(10)
+        self.assertEqual(in_season.player_weight(w, 4, 10), w)
+        self.assertAlmostEqual(in_season.player_weight(w, 2, 10), w / 4)
+        self.assertAlmostEqual(in_season.player_weight(w, 3, 10), w * 9 / 16)
 
     def test_full_attendance_moves_as_far_as_before(self):
         # The per-player shrink must not damp a player who has played every week.
@@ -367,17 +393,18 @@ class PlayerGamesWeighting(unittest.TestCase):
         # Shipped config: the floor keeps him out of production entirely.
         in_season.attach_in_season(players, agg, {}, 10)
         self.assertEqual(rbs[-1]["isr"], rbs[-1]["ro"])
-        # With the floor switched off the per-player weight alone must still
-        # hold him within a couple of spots: 1 of 10 games -> 1% of w(10).
-        with mock.patch.object(in_season, "PROD_MIN_GAMES_SHARE", 0.0):
+        # With both floors switched off the per-player weight alone must still
+        # hold him close: 1 game of a 4-game window -> 1/16 of w(10).
+        with mock.patch.object(in_season, "PROD_MIN_GAMES", 0), \
+                mock.patch.object(in_season, "SEASON_MIN_GAMES_SHARE", 0.0):
             players, rbs, agg = self._board(10, {breakout_sid: 1})
             in_season.attach_in_season(players, agg, {}, 10)
             one_game = rbs[-1]["ro"] - rbs[-1]["isr"]
             players, rbs, agg = self._board(10, {})
             in_season.attach_in_season(players, agg, {}, 10)
             every_game = rbs[-1]["ro"] - rbs[-1]["isr"]
-        self.assertLessEqual(one_game, 2)
-        self.assertGreater(every_game, 10 * max(one_game, 1))
+        self.assertLessEqual(one_game, 3)
+        self.assertGreater(every_game, 4 * max(one_game, 1))
 
     def test_bye_is_not_a_missed_game(self):
         players = _players(4)
@@ -389,8 +416,8 @@ class PlayerGamesWeighting(unittest.TestCase):
 
 
 class SmallSampleFloor(unittest.TestCase):
-    """Points per game rewards a tiny sample; production only re-ranks a player
-    once he has played half the completed weeks."""
+    """Points per game rewards a tiny sample; the SEASON boards only re-rank a
+    player once he has played half the completed weeks (the form boards: 2)."""
 
     def test_floor_scales_with_completed_weeks(self):
         self.assertEqual([in_season.min_games_for(n) for n in (0, 1, 4, 10, 17)],
@@ -420,6 +447,206 @@ class SmallSampleFloor(unittest.TestCase):
         in_season.attach_in_season(players, agg, {}, weeks_complete=10)
         p = next(x for x in players if x["sid"] == "3")
         self.assertEqual((p["wg"], p["wpg"]), (1, 20))
+
+
+def _form_agg(weekly_by_sid):
+    """pid -> list of PPR games played (half = ppr - 1, std = ppr - 2 per
+    game) -> aggregate records carrying the weekly lists."""
+    out = {}
+    for sid, games in weekly_by_sid.items():
+        rec = {"g": len(games), "weekly_ppr": list(games),
+               "weekly_half": [g - 1 for g in games], "weekly_std": [g - 2 for g in games]}
+        for fmt in ("ppr", "half", "std"):
+            rec[fmt] = sum(rec[f"weekly_{fmt}"])
+        out[sid] = rec
+    return out
+
+
+class RecentForm(unittest.TestCase):
+    """The projected boards rank on the last FORM_GAMES games PLAYED."""
+
+    def test_rate_is_the_last_four_games_played(self):
+        rec = _form_agg({"1": [30, 30, 30, 30, 10, 10, 10, 10]})["1"]
+        self.assertEqual(in_season.recent_per_game(rec, "ppr"), 10.0)
+        self.assertEqual(in_season.per_game(rec, "ppr"), 20.0)       # season untouched
+        self.assertEqual(in_season.recent_per_game(rec, "std"), 8.0)
+
+    def test_fewer_than_four_uses_what_he_has(self):
+        rec = _form_agg({"1": [12, 18]})["1"]
+        self.assertEqual(in_season.recent_per_game(rec, "ppr"), 15.0)
+
+    def test_a_missed_week_is_not_a_zero(self):
+        # Weeks 1, 2, 5, 6 played; 3 and 4 missed. The aggregate holds games
+        # played only, so the window is those four games, no zeros in it.
+        meta = {"9": {"position": "WR", "full_name": "W"}}
+        line = {"gp": 1, "pts_ppr": 20.0, "pts_half_ppr": 18.0, "pts_std": 16.0}
+        weeks = {w: ({"9": line} if w in (1, 2, 5, 6) else {}) for w in range(1, 7)}
+        agg, _, _ = in_season.aggregate_completed(weeks, meta, set(range(1, 7)))
+        self.assertEqual(agg["9"]["weekly_half"], [18.0] * 4)
+        self.assertEqual(in_season.recent_per_game(agg["9"], "ppr"), 20.0)
+
+    def test_projected_rate_blends_season_and_form(self):
+        rec = _form_agg({"1": [30, 30, 30, 30, 10, 10, 10, 10]})["1"]
+        s = in_season.RECENT_SHARE
+        self.assertAlmostEqual(in_season.projected_rate(rec, "ppr"), (1 - s) * 20 + s * 10)
+        self.assertAlmostEqual(in_season.projected_rate(rec, "std"), (1 - s) * 18 + s * 8)
+
+    def _two_wrs(self, a_games, b_games):
+        players = _players(8)
+        a, b = [p for p in players if p["p"] == "WR"]
+        in_season.attach_in_season(players, _form_agg({a["sid"]: a_games, b["sid"]: b_games}),
+                                   {}, weeks_complete=8)
+        return a, b
+
+    def test_a_big_season_outweighs_one_good_month(self):
+        # A had the much better season, B the better month: rf says B, the
+        # season and the projected board (75% season rate) still say A.
+        a, b = self._two_wrs([40, 40, 40, 40, 10, 10, 10, 10], [5, 5, 5, 5, 20, 20, 20, 20])
+        self.assertLess(a["sr"], b["sr"])
+        for field in ("rf", "rfh", "rfs"):
+            self.assertLess(b[field], a[field], field)
+        self.assertLess(a["isr"], b["isr"])
+
+    def test_form_tips_a_close_season(self):
+        # Season 20.0 vs 19.0, last month 20 vs 24: the trend decides it.
+        a, b = self._two_wrs([20] * 8, [14, 14, 14, 14, 24, 24, 24, 24])
+        self.assertLess(a["sr"], b["sr"])
+        self.assertLess(b["isr"], a["isr"])
+
+    def test_one_game_falls_back_to_the_season_slot(self):
+        # Week 1: everyone has one game. Below the 2-game form floor the
+        # projected board uses the season slot, so week 1 still moves.
+        players = _players(40)
+        wrs = [p for p in players if p["p"] == "WR"]
+        top, deep = wrs[0], wrs[5]
+        agg = _form_agg({top["sid"]: [2], deep["sid"]: [30]})
+        in_season.attach_in_season(players, agg, {}, weeks_complete=1)
+        self.assertEqual(deep["rf"], deep["ro"])                      # form: no rank yet
+        self.assertEqual(deep["sr"], top["ro"])                       # season: WR1 slot
+        self.assertLess(deep["isr"], deep["ro"])
+
+    def test_form_floor_is_two_games_at_any_week(self):
+        for n in (2, 8, 17):
+            players = _players(8)
+            wrs = [p for p in players if p["p"] == "WR"]
+            agg = _form_agg({wrs[0]["sid"]: [5] * n, wrs[1]["sid"]: [30, 30]})
+            slots = in_season.form_slots(players, agg, n)
+            self.assertEqual(slots[wrs[1]["id"]], float(wrs[0]["ro"]), n)
+
+
+class ProjectedInjuries(unittest.TestCase):
+    """Injuries price the projected boards once, at full strength, never ro."""
+
+    NOW = None
+
+    def _twins(self, st, note=None, onset=None, inj=None, nudge=0.0, games=None):
+        # 120 players; two RBs with identical form. The twin carries `st` and the
+        # injury price model would have put in his ro (`_inj`).
+        players = _players(120)
+        rbs = [p for p in players if p["p"] == "RB"]
+        ref, twin = rbs[10], rbs[11]
+        agg = _form_agg({p["sid"]: [100.0 - p["ro"]] * 8 for p in rbs})
+        agg[ref["sid"]] = agg[twin["sid"]] = _form_agg({"x": games or [70.0] * 8})["x"]
+        twin["st"], twin["note"] = st, note
+        twin["_inj"] = in_season.model.INJURY_PENALTY.get(st, 0) if inj is None else inj
+        twin["_nudge"] = nudge
+        import datetime
+        now = datetime.datetime(2026, 11, 5, tzinfo=datetime.timezone.utc)
+        state = {}
+        if onset is not None:
+            state[twin["sid"]] = {"status": st, "first_seen": in_season.injury_onset.iso(
+                now - datetime.timedelta(days=onset))}
+        in_season.attach_in_season(players, agg, {}, 8, set(range(1, 9)), state, now)
+        return players, ref, twin
+
+    def test_questionable_costs_nothing(self):
+        # Same player, same ro: healthy vs Questionable (ro priced at 0 here, so
+        # only the projected penalty differs), then with ro's 4 refunded.
+        _, _, healthy = self._twins(None, inj=0)
+        _, _, q = self._twins("Questionable", inj=0)
+        self.assertEqual(q["isr"], healthy["isr"])
+        _, _, refunded = self._twins("Questionable", inj=4)
+        self.assertLessEqual(refunded["isr"], healthy["isr"])
+
+    def test_doubtful_is_small(self):
+        self.assertEqual(in_season.projected_penalty({"st": "Doubtful"}, {}, None), 15)
+
+    def test_out_drops_by_the_penalty_once(self):
+        # Same player, same ro (priced at 0 here): Out costs him ~30 spots at
+        # full strength, not (1 - w) of it, and nothing more.
+        _, _, healthy = self._twins(None, inj=0)
+        _, _, out = self._twins("Out", inj=0)
+        self.assertGreaterEqual(out["isr"] - healthy["isr"], 25)
+        self.assertLessEqual(out["isr"] - healthy["isr"], 35)
+
+    def test_missed_games_do_not_compound(self):
+        # Same Out status; one twin played all 8, the other his last 4 after
+        # missing 4. A full form window is a full weight: they land together.
+        _, ref, full = self._twins("Out")
+        _, ref2, missed = self._twins("Out", games=[70.0] * 4)
+        self.assertLessEqual(abs(full["isr"] - missed["isr"]), 1)
+
+    def test_statuses_price_like_model(self):
+        for st in ("Out", "IR", "PUP", "Sus", "NA", "COV"):
+            self.assertEqual(in_season.projected_penalty({"st": st}, {}, None),
+                             in_season.model.INJURY_PENALTY[st], st)
+
+    def test_long_by_onset(self):
+        self.assertEqual(in_season.projected_penalty(*self._args("Out", onset=21)), 60)
+        self.assertEqual(in_season.projected_penalty(*self._args("Out", onset=20)), 30)
+        self.assertEqual(in_season.projected_penalty(*self._args("IR", onset=40)), 60)
+
+    def _args(self, st, onset=None, note=None):
+        import datetime
+        now = datetime.datetime(2026, 11, 5, tzinfo=datetime.timezone.utc)
+        p = {"sid": "1", "st": st, "note": note}
+        state = {} if onset is None else {"1": {"status": st, "first_seen": in_season.injury_onset.iso(
+            now - datetime.timedelta(days=onset))}}
+        return p, state, now
+
+    def test_long_by_sleeper_note(self):
+        for note in ("Listed Out, Knee - ACL — Surgery", "Listed Out, Achilles",
+                     "Listed Sus, out for the season"):
+            self.assertEqual(in_season.projected_penalty(*self._args("Out", note=note)), 60, note)
+
+    def test_manual_news_and_playing_statuses_are_not_long(self):
+        # Stale override history on a listed player, and a Questionable with
+        # an Achilles note, are not season-ending listings.
+        self.assertEqual(in_season.projected_penalty(
+            *self._args("Out", note="2025 ACL tear; targeting Week 1 | Listed Out, Groin")), 30)
+        self.assertEqual(in_season.projected_penalty(
+            *self._args("Questionable", note="Listed Questionable, Achilles — Tendinitis")), 0)
+        self.assertEqual(in_season.projected_penalty(*self._args(None, note="Jan 2026 Achilles tear")), 0)
+
+    def test_long_injury_sinks_on_isr(self):
+        _, ref, short = self._twins("Out", onset=5)
+        _, ref2, long_ = self._twins("Out", onset=30)
+        self.assertGreater(long_["isr"] - ref2["isr"], short["isr"] - ref["isr"] + 20)
+
+    def test_never_ro_sr_or_rf(self):
+        _, _, healthy = self._twins(None, inj=0)
+        _, _, hurt = self._twins("IR", note="Listed IR, Knee - ACL")
+        self.assertEqual(hurt["ro"], healthy["ro"])                     # never written
+        for field in ("sr", "srh", "srs", "rf", "rfh", "rfs"):
+            self.assertEqual(hurt[field], healthy[field], field)
+        self.assertGreater(hurt["isr"] - healthy["isr"], 40)
+
+    def test_nudge_is_not_stacked(self):
+        # A -46 availability nudge already prices an NA listing (model's rule).
+        self.assertEqual(in_season.projected_penalty({"st": "NA"}, {}, None, -46.0), 0.0)
+        self.assertEqual(in_season.projected_penalty({"st": "Out"}, {}, None, -10.0), 20.0)
+
+    def test_private_keys_are_popped(self):
+        players, _, twin = self._twins("Out")
+        self.assertFalse(any(k.startswith("_") for p in players for k in p))
+
+    def test_zero_weeks_statuses_change_nothing(self):
+        players = _players(40)
+        for p in players[::3]:
+            p["st"], p["_inj"] = "IR", 60
+        in_season.attach_in_season(players, {}, {}, 0)
+        for field in BOARDS:
+            self.assertEqual([p[field] for p in players], [p["ro"] for p in players], field)
 
 
 class CompletedWeeksOnly(unittest.TestCase):

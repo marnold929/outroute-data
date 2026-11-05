@@ -79,7 +79,9 @@ def aggregate(weeks: dict[int, dict], players_map: dict) -> dict[str, dict]:
     """Season totals per player, keyed by Sleeper pid.
 
     Only fantasy positions; only rows with gp >= 1. Each player carries his
-    weekly PPR scores so boom/bust can be counted without a second pass.
+    weekly scores per format (weekly_ppr / weekly_half / weekly_std, one entry
+    per game PLAYED, oldest first) so boom/bust and recent form can be read
+    without a second pass.
     """
     out: dict[str, dict] = {}
     for wk in sorted(weeks):
@@ -98,12 +100,13 @@ def aggregate(weeks: dict[int, dict], players_map: dict) -> dict[str, dict]:
                 "pid": pid, "pos": pos,
                 "name": meta.get("full_name") or meta.get("last_name") or pid,
                 "team": meta.get("team") or "",
-                "g": 0, "ppr": 0.0, "half": 0.0, "std": 0.0, "weekly_ppr": [],
+                "g": 0, "ppr": 0.0, "half": 0.0, "std": 0.0,
+                "weekly_ppr": [], "weekly_half": [], "weekly_std": [],
             })
             rec["g"] += 1
             for fmt, key in SCORING_KEYS.items():
                 rec[fmt] += _points(line, key)
-            rec["weekly_ppr"].append(_points(line, "pts_ppr"))
+                rec[f"weekly_{fmt}"].append(_points(line, key))
 
     for rec in out.values():
         g = rec["g"]

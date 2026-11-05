@@ -356,13 +356,13 @@ def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, tea
 
         # 1) injury/availability adjustment
         note = None
-        pen = 0
+        pen = inj = 0
         status = sp.get("injury_status")
         nudge = float(overrides.get("rank_nudge", {}).get(name, overrides.get("rank_nudge", {}).get(e["name"], 0)))
         if status:
             if injuries_live:
                 # A manual nudge already prices availability — don't stack.
-                pen = effective_injury_penalty(INJURY_PENALTY.get(status, 8), nudge)
+                pen = inj = effective_injury_penalty(INJURY_PENALTY.get(status, 8), nudge)
             note = injury_note(sp)
         # 2) depth-chart reality check: priced like a starter but buried on depth chart
         dco = sp.get("depth_chart_order")
@@ -398,6 +398,9 @@ def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, tea
             "_pid": sp.get("_pid"),
             "_sfx_score": (score + pen) * (0.55 if pos == "QB" else 1.0),
             "_adpless": False,
+            # The injury price inside `score` and the manual nudge beside it,
+            # for in_season's projected boards (popped there, never published).
+            "_inj": inj, "_nudge": nudge,
         })
 
     # --- Full-pool union: append fantasy-relevant Sleeper actives with no ADP.
@@ -435,6 +438,10 @@ def assemble(adp_ppr, adp_half, adp_std, sleeper, trending, byes, overrides, tea
             "_pid": pid,
             "_sfx_score": score * (0.55 if pos == "QB" else 1.0),
             "_adpless": True,
+            # As for market players; reality() priced the status unnudged.
+            "_inj": (INJURY_PENALTY.get(sp.get("injury_status"), 0)
+                     if (injuries_live and sp.get("injury_status")) else 0),
+            "_nudge": 0.0,
         })
 
     # 1) All 32 team defenses (dedup by team; match the existing "City Defense
