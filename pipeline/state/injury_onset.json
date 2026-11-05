@@ -15,10 +15,6 @@
   "first_seen": "2026-11-04T23:37:35Z",
   "status": "Questionable"
  },
- "10229": {
-  "first_seen": "2026-11-04T23:37:35Z",
-  "status": "Questionable"
- },
  "10232": {
   "first_seen": "2026-11-02T01:29:26Z",
   "status": "Questionable"
@@ -41,7 +37,7 @@
  },
  "11299": {
   "first_seen": "2026-11-05T09:30:46Z",
-  "status": "Questionable"
+  "status": "IR"
  },
  "11320": {
   "first_seen": "2026-11-04T23:37:35Z",
@@ -50,6 +46,10 @@
  "11370": {
   "first_seen": "2026-10-04T19:38:06Z",
   "status": "IR"
+ },
+ "11581": {
+  "first_seen": "2026-11-05T21:59:11Z",
+  "status": "Questionable"
  },
  "11583": {
   "first_seen": "2026-09-20T20:46:36Z",
@@ -70,6 +70,10 @@
  "11626": {
   "first_seen": "2026-09-24T19:59:31Z",
   "status": "IR"
+ },
+ "11632": {
+  "first_seen": "2026-11-05T21:59:11Z",
+  "status": "Questionable"
  },
  "11643": {
   "first_seen": "2026-11-04T23:37:35Z",
@@ -103,8 +107,8 @@
   "first_seen": "2026-11-03T02:18:56Z",
   "status": "Questionable"
  },
- "12498": {
-  "first_seen": "2026-11-04T23:37:35Z",
+ "12506": {
+  "first_seen": "2026-11-05T21:59:11Z",
   "status": "Questionable"
  },
  "12508": {
@@ -114,10 +118,6 @@
  "12511": {
   "first_seen": "2026-11-01T20:30:24Z",
   "status": "Out"
- },
- "12514": {
-  "first_seen": "2026-10-21T20:09:57Z",
-  "status": "Questionable"
  },
  "12529": {
   "first_seen": "2026-10-29T21:07:54Z",
@@ -191,10 +191,6 @@
   "first_seen": "2026-10-27T05:06:15Z",
   "status": "PUP"
  },
- "1466": {
-  "first_seen": "2026-11-04T23:37:35Z",
-  "status": "Questionable"
- },
  "2133": {
   "first_seen": "2026-10-19T22:19:02Z",
   "status": "IR"
@@ -249,7 +245,7 @@
  },
  "4881": {
   "first_seen": "2026-11-01T20:30:24Z",
-  "status": "Out"
+  "status": "IR"
  },
  "4943": {
   "first_seen": "2026-11-04T19:45:32Z",
@@ -333,7 +329,7 @@
  },
  "7083": {
   "first_seen": "2026-11-01T20:30:24Z",
-  "status": "Out"
+  "status": "IR"
  },
  "7204": {
   "first_seen": "2026-10-07T23:02:55Z",
@@ -353,10 +349,6 @@
  },
  "7547": {
   "first_seen": "2026-11-04T23:37:35Z",
-  "status": "Questionable"
- },
- "7567": {
-  "first_seen": "2026-11-05T09:30:46Z",
   "status": "Questionable"
  },
  "7593": {
