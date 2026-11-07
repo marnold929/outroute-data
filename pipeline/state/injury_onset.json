@@ -35,6 +35,10 @@
   "first_seen": "2026-10-04T19:38:06Z",
   "status": "IR"
  },
+ "11577": {
+  "first_seen": "2026-11-07T14:54:31Z",
+  "status": "IR"
+ },
  "11581": {
   "first_seen": "2026-11-05T21:59:11Z",
   "status": "Questionable"
@@ -287,6 +291,10 @@
   "first_seen": "2026-11-05T23:36:32Z",
   "status": "Questionable"
  },
+ "7083": {
+  "first_seen": "2026-11-07T14:54:31Z",
+  "status": "IR"
+ },
  "7204": {
   "first_seen": "2026-10-07T23:02:55Z",
   "status": "IR"
@@ -334,10 +342,6 @@
  "8121": {
   "first_seen": "2026-10-18T18:38:34Z",
   "status": "IR"
- },
- "8129": {
-  "first_seen": "2026-10-27T15:51:31Z",
-  "status": "Questionable"
  },
  "8137": {
   "first_seen": "2026-11-04T23:37:35Z",
