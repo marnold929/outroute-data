@@ -91,6 +91,10 @@
   "first_seen": "2026-10-29T22:42:15Z",
   "status": "IR"
  },
+ "12492": {
+  "first_seen": "2026-11-08T06:01:35Z",
+  "status": "Questionable"
+ },
  "12508": {
   "first_seen": "2026-09-22T00:48:47Z",
   "status": "IR"
@@ -349,10 +353,6 @@
  },
  "8205": {
   "first_seen": "2026-09-16T02:50:48Z",
-  "status": "IR"
- },
- "8208": {
-  "first_seen": "2026-10-16T04:33:07Z",
   "status": "IR"
  },
  "8230": {
