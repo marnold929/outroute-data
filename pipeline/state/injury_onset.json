@@ -3,10 +3,6 @@
   "first_seen": "2026-11-12T00:37:26Z",
   "status": "Questionable"
  },
- "10212": {
-  "first_seen": "2026-11-11T22:42:07Z",
-  "status": "Out"
- },
  "10214": {
   "first_seen": "2026-11-12T07:11:44Z",
   "status": "Questionable"
@@ -418,6 +414,10 @@
  "9226": {
   "first_seen": "2026-09-27T19:46:15Z",
   "status": "IR"
+ },
+ "9481": {
+  "first_seen": "2026-11-14T08:55:46Z",
+  "status": "PUP"
  },
  "9486": {
   "first_seen": "2026-10-22T23:23:00Z",
