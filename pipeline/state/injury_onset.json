@@ -87,10 +87,6 @@
   "first_seen": "2026-11-19T01:52:32Z",
   "status": "Questionable"
  },
- "11762": {
-  "first_seen": "2026-11-17T02:56:04Z",
-  "status": "Questionable"
- },
  "12048": {
   "first_seen": "2026-11-15T22:46:20Z",
   "status": "Out"
@@ -102,6 +98,14 @@
  "12455": {
   "first_seen": "2026-11-17T13:27:33Z",
   "status": "IR"
+ },
+ "12467": {
+  "first_seen": "2026-11-20T00:35:17Z",
+  "status": "Questionable"
+ },
+ "12470": {
+  "first_seen": "2026-11-20T00:35:17Z",
+  "status": "Out"
  },
  "12474": {
   "first_seen": "2026-11-15T21:02:59Z",
