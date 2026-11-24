@@ -41,7 +41,7 @@
  },
  "11273": {
   "first_seen": "2026-11-22T21:53:45Z",
-  "status": "Questionable"
+  "status": "IR"
  },
  "11435": {
   "first_seen": "2026-11-15T21:02:59Z",
@@ -66,10 +66,6 @@
  "11588": {
   "first_seen": "2026-11-03T02:18:56Z",
   "status": "Out"
- },
- "11595": {
-  "first_seen": "2026-11-24T19:30:21Z",
-  "status": "IR"
  },
  "11600": {
   "first_seen": "2026-11-24T19:30:21Z",
@@ -106,6 +102,10 @@
  "12048": {
   "first_seen": "2026-11-15T22:46:20Z",
   "status": "IR"
+ },
+ "12062": {
+  "first_seen": "2026-11-24T23:27:55Z",
+  "status": "Out"
  },
  "12455": {
   "first_seen": "2026-11-24T12:25:02Z",
@@ -147,6 +147,10 @@
   "first_seen": "2026-11-22T17:47:47Z",
   "status": "Out"
  },
+ "12521": {
+  "first_seen": "2026-11-24T23:27:55Z",
+  "status": "IR"
+ },
  "12529": {
   "first_seen": "2026-10-29T21:07:54Z",
   "status": "IR"
@@ -169,6 +173,10 @@
  },
  "12715": {
   "first_seen": "2026-11-22T21:53:45Z",
+  "status": "Out"
+ },
+ "13268": {
+  "first_seen": "2026-11-24T23:27:55Z",
   "status": "Out"
  },
  "13272": {
@@ -243,6 +251,10 @@
   "first_seen": "2026-09-11T04:41:46Z",
   "status": "IR"
  },
+ "13418": {
+  "first_seen": "2026-11-24T23:27:55Z",
+  "status": "Out"
+ },
  "13423": {
   "first_seen": "2026-11-24T19:30:21Z",
   "status": "Out"
@@ -311,16 +323,16 @@
   "first_seen": "2026-11-22T21:53:45Z",
   "status": "Questionable"
  },
+ "5008": {
+  "first_seen": "2026-11-24T23:27:55Z",
+  "status": "IR"
+ },
  "5022": {
   "first_seen": "2026-11-24T01:38:37Z",
   "status": "Questionable"
  },
  "5121": {
   "first_seen": "2026-10-04T19:38:06Z",
-  "status": "IR"
- },
- "5409": {
-  "first_seen": "2026-11-24T04:48:49Z",
   "status": "IR"
  },
  "5849": {
@@ -371,6 +383,10 @@
   "first_seen": "2026-09-11T12:49:51Z",
   "status": "DNR"
  },
+ "6806": {
+  "first_seen": "2026-11-24T23:27:55Z",
+  "status": "Out"
+ },
  "6819": {
   "first_seen": "2026-10-07T21:18:41Z",
   "status": "IR"
@@ -406,6 +422,10 @@
  "7593": {
   "first_seen": "2026-09-16T02:50:48Z",
   "status": "IR"
+ },
+ "7757": {
+  "first_seen": "2026-11-24T23:27:55Z",
+  "status": "Questionable"
  },
  "7828": {
   "first_seen": "2026-11-22T21:53:45Z",
