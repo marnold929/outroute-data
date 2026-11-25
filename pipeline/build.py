@@ -10,7 +10,13 @@ Published here (the rest of the field reference lives in in_season.py):
     wv / wvh / wvs   forward-looking waiver rank, PPR / half / standard
           (waiver_rank.py). Omitted at zero completed weeks.
     wn    one-line waiver reason, <= 30 chars (waiver_rank.waiver_note):
-          promotion, else starter-level usage. Omitted when neither applies.
+          promotion, else starter-level usage. Omitted when neither applies,
+          and on established starters.
+    est   1 on an established starter (waiver_rank.ESTABLISHED), who sorts
+          below every available pickup on wv. Omitted otherwise.
+    ai    optional AI take on the top 150 by isr (blurbs.py).
+    aih   short hash of the fact sheet `ai` was written from; a build reuses
+          the previously published `ai` while it matches.
 
 Also written, beside the board: pipeline/state/injury_onset.json, the first
 time each currently-listed injury status was seen (injury_onset.py). CI commits
