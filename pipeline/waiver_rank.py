@@ -8,7 +8,11 @@ STRICTLY ADDITIVE, like in_season.py. New fields, one per scoring format:
 
     wn    waiver note: one short reason for where he ranks (see waiver_note),
           e.g. "RB1 with Achane out" / "41% of HOU RB touches". Omitted when
-          there is nothing worth saying.
+          there is nothing worth saying, and always on an established starter.
+
+    est   1 on an ESTABLISHED STARTER (see ESTABLISHED below), by the PPR
+          boards (sr / isr — the default format, the same one `wn` speaks
+          for). Omitted otherwise, and at zero completed weeks.
 
 Each wv field is a dense 1..N ranking of the whole board. All four are OMITTED at zero
 completed weeks: there is nothing to have picked up yet, and a waiver board
@@ -154,10 +158,30 @@ W_MARKET = 0.20
 W_USAGE = 0.30
 W_ROLE = 0.10
 
+# ESTABLISHED — a player already producing like a starter is not a waiver add.
+# The feed cannot see anyone's roster, and a user whose league data is from
+# draft night would otherwise see rostered starters as the top pickups (on the
+# 2026-11-25 feed Jonah Coleman, season RB12 at 16 PPG over 6 games, was wv 1).
+#
+# "Established starter": position QB/RB/WR/TE, at least EST_MIN_GAMES games
+# played this season (`wg`), and the BETTER of his season position rank and his
+# projected position rank — in the format being built: sr/isr for wv, srh/ish
+# for wvh, srs/iss for wvs — inside EST_MAX_POS_RANK at his position. The
+# numbers are the starting-lineup depth of a 12-team league with a flex or two:
+# QB12, RB24, WR30, TE10.
+#
+# In the final order established starters sort after every non-established
+# available player and before every unavailable one; order inside each group is
+# unchanged. The games floor also makes this a no-op at zero completed weeks.
+EST_MIN_GAMES = 4
+EST_MAX_POS_RANK = {"QB": 12, "RB": 24, "WR": 30, "TE": 10}
+
 # Positions scored (and folded) independently.
 POSITIONS = ("QB", "RB", "WR", "TE", "K", "DST")
 
 FIELDS = (("wv", "sr"), ("wvh", "srh"), ("wvs", "srs"))
+# waiver field -> (season board, projected board) for ESTABLISHED.
+EST_FIELDS = {"wv": ("sr", "isr"), "wvh": ("srh", "ish"), "wvs": ("srs", "iss")}
 
 
 def unavailable(p: dict) -> bool:
@@ -402,32 +426,58 @@ def waiver_note(p: dict, role: dict | None) -> str | None:
     return None
 
 
+def established(players: list[dict], field: str = "wv") -> set[str]:
+    """ids of ESTABLISHED starters for one waiver field (see ESTABLISHED)."""
+    season, projected = EST_FIELDS[field]
+    s_rank = position_rank(players, season)
+    p_rank = position_rank(players, projected)
+    out = set()
+    for p in players:
+        cap = EST_MAX_POS_RANK.get(p.get("p"))
+        if cap is None or (p.get("wg") or 0) < EST_MIN_GAMES:
+            continue
+        ranks = [r for r in (s_rank.get(p["id"]), p_rank.get(p["id"])) if r]
+        if ranks and min(ranks) <= cap:
+            out.add(p["id"])
+    return out
+
+
 def attach_waiver_rank(players: list[dict], weeks_complete: int,
                        onset: dict | None = None, now=None) -> int:
-    """Publish wv / wvh / wvs and wn. Omitted (and any stale copy removed) at zero
-    completed weeks. Returns how many players got the fields.
+    """Publish wv / wvh / wvs, wn and est. Omitted (and any stale copy removed)
+    at zero completed weeks. Returns how many players got the fields.
 
-    The overall order is (unavailable last, slot, ro): the fold keeps an Out
-    RB below every healthy RB, and the unavailable-last key keeps him below
-    every healthy player at every other position too.
+    The overall order is (unavailable last, established next-to-last, slot,
+    ro): the fold keeps an Out RB below every healthy RB, the unavailable-last
+    key keeps him below every healthy player at every other position too, and
+    an established starter (ESTABLISHED) sits below every available pickup.
     """
     if max(0, int(weeks_complete or 0)) == 0:
         for p in players:
             for field, _ in FIELDS:
                 p.pop(field, None)
             p.pop("wn", None)
+            p.pop("est", None)
         return 0
     roles = effective_roles(players, onset, now)
+    est_ppr = established(players, "wv")
     for p in players:
-        note = waiver_note(p, roles.get(p["id"]))
+        note = (None if p["id"] in est_ppr
+                else waiver_note(p, roles.get(p["id"])))
         if note:
             p["wn"] = note
         else:
             p.pop("wn", None)
+        if p["id"] in est_ppr:
+            p["est"] = 1
+        else:
+            p.pop("est", None)
     for field, source in FIELDS:
         comps = components(players, source, roles=roles)
         slots = waiver_slots(players, comps)
+        est = established(players, field)
         ordered = sorted(players, key=lambda p: (comps[p["id"]]["unavailable"],
+                                                 p["id"] in est,
                                                  slots[p["id"]], p["ro"]))
         for i, p in enumerate(ordered, 1):
             p[field] = i

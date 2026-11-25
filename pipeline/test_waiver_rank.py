@@ -252,6 +252,162 @@ class Fields(unittest.TestCase):
         self.assertTrue(all(p["wv"] > 1 for p in ks))
 
 
+def _est_board():
+    """A board where established starters and waiver candidates mix.
+
+    30 filler RBs hold season/projected RB ranks 1-30 with wg 0 (never
+    established themselves), so the named players below land at known
+    position ranks: anyone with sr/isr better than RB24 AND wg >= 4 is
+    established. Teams are all distinct so nobody promotes anybody."""
+    players = []
+    for i in range(1, 31):
+        players.append(_p(f"F{i}", t=f"F{i}", ro=400 + i, sr=2 * i, wg=0,
+                          isr=2 * i, ish=2 * i, iss=2 * i))
+    def rb(n, ro, sr, isr, wg, st=None, **kw):
+        q = _p(n, t=n, ro=ro, sr=sr, st=st, wg=wg, isr=isr, ish=isr, iss=isr)
+        q.update(kw)
+        return q
+    players += [
+        # sr 21 -> RB11 (between fillers at 20 and 22): established
+        rb("EstSeason", ro=200, sr=21, isr=300, wg=6, ta=900),
+        # projected only: isr 25 -> RB13: established
+        rb("EstProj", ro=210, sr=300, isr=25, wg=5, ta=800),
+        # good ranks but 3 games: NOT established
+        rb("ShortGames", ro=220, sr=23, isr=23, wg=3, ta=700),
+        # 4 games, RB rank > 24 on both boards: NOT established
+        rb("Fringe", ro=230, sr=301, isr=302, wg=8, ta=600),
+        rb("Waiver", ro=240, sr=303, isr=304, wg=6, ta=500),
+        # established by the numbers, but Out: stays with the unavailable
+        rb("EstOut", ro=250, sr=19, isr=19, wg=7, st="Out"),
+        rb("PlainOut", ro=260, sr=305, isr=305, wg=7, st="IR"),
+    ]
+    return players
+
+
+def _by_name(players):
+    return {p["n"]: p for p in players}
+
+
+class Established(unittest.TestCase):
+    def _attach(self, players, rule=True):
+        if rule:
+            waiver_rank.attach_waiver_rank(players, 11, {}, NOW)
+            return
+        orig = waiver_rank.established
+        waiver_rank.established = lambda *a, **k: set()
+        try:
+            waiver_rank.attach_waiver_rank(players, 11, {}, NOW)
+        finally:
+            waiver_rank.established = orig
+
+    def test_definition(self):
+        players = _est_board()
+        est = waiver_rank.established(players, "wv")
+        names = {p["n"] for p in players if p["id"] in est}
+        self.assertEqual(names, {"EstSeason", "EstProj", "EstOut"})
+
+    def test_established_sinks_below_every_available_non_established(self):
+        players = _est_board()
+        self._attach(players)
+        for f in FIELDS:
+            est = [p[f] for p in players if p.get("est") and not waiver_rank.unavailable(p)]
+            rest = [p[f] for p in players if not p.get("est") and not waiver_rank.unavailable(p)]
+            self.assertTrue(est and rest)
+            self.assertGreater(min(est), max(rest), f)
+
+    def test_unavailable_still_last(self):
+        players = _est_board()
+        self._attach(players)
+        for f in FIELDS:
+            out = [p[f] for p in players if waiver_rank.unavailable(p)]
+            ok = [p[f] for p in players if not waiver_rank.unavailable(p)]
+            self.assertGreater(min(out), max(ok), f)
+            self.assertEqual(sorted(out), list(range(len(ok) + 1, len(players) + 1)), f)
+
+    def test_order_inside_each_group_unchanged(self):
+        before, after = _est_board(), _est_board()
+        self._attach(before, rule=False)
+        self._attach(after)
+        bn = _by_name(before)
+        for f in FIELDS:
+            est = waiver_rank.established(after, f)
+            def group(p):
+                return (waiver_rank.unavailable(p), p["id"] in est)
+            for g in {group(p) for p in after}:
+                members = [p for p in after if group(p) == g]
+                self.assertEqual(
+                    [p["n"] for p in sorted(members, key=lambda p: p[f])],
+                    [p["n"] for p in sorted(members, key=lambda p: bn[p["n"]][f])],
+                    (f, g))
+
+    def test_ranks_stay_dense(self):
+        players = _est_board()
+        self._attach(players)
+        for f in FIELDS:
+            self.assertEqual(sorted(p[f] for p in players),
+                             list(range(1, len(players) + 1)), f)
+
+    def test_est_present_only_on_established_and_wn_cleared(self):
+        players = _est_board()
+        # starter-level usage would normally earn a note
+        for p in players:
+            if p["n"] in ("EstSeason", "Waiver"):
+                p.update(us="2026 wk9-11", uc=18, ut=4)
+        self._attach(players)
+        n = _by_name(players)
+        for p in players:
+            if p["n"] in ("EstSeason", "EstProj", "EstOut"):
+                self.assertEqual(p.get("est"), 1, p["n"])
+            else:
+                self.assertNotIn("est", p, p["n"])
+        self.assertNotIn("wn", n["EstSeason"])
+        self.assertIn("wn", n["Waiver"])
+
+    def test_each_format_uses_its_own_boards(self):
+        players = _est_board()
+        n = _by_name(players)
+        # established in standard only
+        n["Waiver"].update(srs=21, iss=300)
+        self.assertIn(n["Waiver"]["id"], waiver_rank.established(players, "wvs"))
+        self.assertNotIn(n["Waiver"]["id"], waiver_rank.established(players, "wv"))
+        self.assertNotIn(n["Waiver"]["id"], waiver_rank.established(players, "wvh"))
+        # established in half-PPR only, by the projected board
+        n["Fringe"].update(ish=21)
+        self.assertEqual({p["n"] for p in players
+                          if p["id"] in waiver_rank.established(players, "wvh")},
+                         {"EstSeason", "EstProj", "EstOut", "Fringe"})
+        self._attach(players)
+        avail = [p for p in players if not waiver_rank.unavailable(p)]
+        for f, who in (("wvs", "Waiver"), ("wvh", "Fringe")):
+            others = [p[f] for p in avail if not (p["id"] in waiver_rank.established(players, f))]
+            self.assertGreater(n[who][f], max(others), f)
+        # est follows the PPR (default) boards only
+        self.assertNotIn("est", n["Waiver"])
+        self.assertNotIn("est", n["Fringe"])
+
+    def test_zero_weeks_nothing_changes(self):
+        # At zero completed weeks every board equals ro and nobody has games.
+        players = _est_board()
+        for p in players:
+            p.update(wg=0, sr=p["ro"], srh=p["ro"], srs=p["ro"],
+                     isr=p["ro"], ish=p["ro"], iss=p["ro"], est=1)
+        for f in FIELDS:
+            self.assertEqual(waiver_rank.established(players, f), set(), f)
+        self.assertEqual(waiver_rank.attach_waiver_rank(players, 0, {}, NOW), 0)
+        for p in players:
+            self.assertNotIn("est", p)
+            for f in FIELDS:
+                self.assertNotIn(f, p)
+        # and the rule is inert on such a board even if ranks were built:
+        a, b = _est_board(), _est_board()
+        for q in a + b:
+            q.update(wg=0)
+        self._attach(a)
+        self._attach(b, rule=False)
+        for f in FIELDS:
+            self.assertEqual([p[f] for p in a], [p[f] for p in b], f)
+
+
 class Onset(unittest.TestCase):
     def test_new_status_is_recorded_now(self):
         s = injury_onset.update({}, [{"sid": "1", "st": "Out"}], NOW)
